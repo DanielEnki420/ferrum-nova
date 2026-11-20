@@ -1,0 +1,74 @@
+---
+import Base from '../layouts/Base.astro';
+const features = [
+  { t: 'Zwei Rohstoffe', d: 'Ferrit für Rumpf und Panzerung, Plasma für Waffen. Sammler bauen beides ab und bringen es zur Basis.' },
+  { t: 'Drei Einheiten', d: 'Schnelle Sammler, robuste Panzer und weitreichende Raketenwerfer, gebaut im Hauptquartier.' },
+  { t: 'Der Schwarm', d: 'Die Vaar sammeln ihre Kräfte und greifen in immer größeren Wellen an. Halte durch und schlag zurück.' },
+  { t: 'Läuft überall', d: 'Geschrieben in Rust mit der Bevy-Engine, als WebAssembly direkt im Browser, ohne Installation.' },
+];
+const controls = [
+  ['Linksklick / Ziehen', 'Einheiten auswählen (Umschalt: hinzufügen)'],
+  ['Rechtsklick', 'Bewegen, Gegner angreifen oder Rohstofffeld abbauen'],
+  ['Strg + Rechtsklick', 'Angriffsmarsch: unterwegs alles bekämpfen'],
+  ['1 / 2 / 3', 'Sammler, Panzer, Raketenwerfer bauen'],
+  ['WASD oder Pfeile', 'Kamera bewegen (auch am Bildschirmrand)'],
+  ['Q / E · Mausrad', 'Kamera drehen · zoomen'],
+  ['Leertaste', 'Zurück zur eigenen Basis'],
+];
+---
+<Base title="Ferrum Nova – Echtzeitstrategie im Browser">
+  <main>
+    <section class="hero">
+      <p class="kicker">Echtzeitstrategie · Rust · WebAssembly</p>
+      <h1>Ferrum Nova</h1>
+      <p class="lead">Die Kestrel-Liga hält die letzte Bastion am Rand des Nova-Gürtels. Baue Rohstoffe ab, stelle eine Armee auf und zerschlage den Vaar-Schwarm, bevor er deine Basis überrennt.</p>
+      <div class="actions">
+        <a class="btn" href="/spielen">Im Browser spielen</a>
+        <a class="btn ghost" href="#steuerung">Steuerung ansehen</a>
+      </div>
+    </section>
+
+    <section id="spiel" class="grid">
+      {features.map((f) => (
+        <article>
+          <h2>{f.t}</h2>
+          <p>{f.d}</p>
+        </article>
+      ))}
+    </section>
+
+    <section id="steuerung" class="controls">
+      <h2>Steuerung</h2>
+      <dl>
+        {controls.map(([k, v]) => (<><dt>{k}</dt><dd>{v}</dd></>))}
+      </dl>
+    </section>
+
+    <footer>Prototyp · Version 0.1 · gebaut mit Rust, Bevy und Astro</footer>
+  </main>
+</Base>
+
+<style>
+  main { max-width: 1040px; margin: 0 auto; padding: 0 16px 48px; }
+  .hero { padding: 88px 0 56px; }
+  .kicker { color: var(--cyan); letter-spacing: .14em; text-transform: uppercase; font-size: 13px; margin: 0; }
+  h1 { font-size: clamp(44px, 8vw, 88px); margin: 10px 0 18px; letter-spacing: -.02em;
+    background: linear-gradient(90deg, #fff, var(--cyan) 60%, var(--blue)); -webkit-background-clip: text;
+    background-clip: text; color: transparent; }
+  .lead { font-size: 19px; line-height: 1.6; color: var(--muted); max-width: 620px; }
+  .actions { display: flex; gap: 12px; margin-top: 28px; flex-wrap: wrap; }
+  .btn { padding: 12px 20px; border-radius: 8px; background: var(--blue); color: #fff; text-decoration: none; font-weight: 600; }
+  .btn.ghost { background: transparent; border: 1px solid var(--line); color: var(--text); }
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 16px; }
+  article { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 20px; }
+  article h2 { font-size: 17px; margin: 0 0 8px; color: var(--cyan); }
+  article p { margin: 0; color: var(--muted); line-height: 1.55; }
+  .controls { margin-top: 56px; }
+  .controls h2 { font-size: 26px; }
+  dl { display: grid; grid-template-columns: max-content 1fr; gap: 10px 24px; background: var(--panel);
+    border: 1px solid var(--line); border-radius: 10px; padding: 20px; margin: 0; }
+  dt { font-family: ui-monospace, Menlo, monospace; color: var(--text); }
+  dd { margin: 0; color: var(--muted); }
+  @media (max-width: 560px) { dl { grid-template-columns: 1fr; } dd { margin-bottom: 8px; } }
+  footer { margin-top: 56px; color: var(--muted); font-size: 14px; border-top: 1px solid var(--line); padding-top: 20px; }
+</style>

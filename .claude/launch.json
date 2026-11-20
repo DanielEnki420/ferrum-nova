@@ -1,0 +1,23 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "game",
+      "runtimeExecutable": "/bin/zsh",
+      "runtimeArgs": [
+        "-c",
+        "export PATH=/opt/homebrew/opt/rustup/bin:$HOME/.cargo/bin:$PATH; cd game && trunk serve --port 8080"
+      ],
+      "port": 8080
+    },
+    {
+      "name": "web",
+      "runtimeExecutable": "/bin/zsh",
+      "runtimeArgs": [
+        "-c",
+        "cd web && npx astro preview --port 4321"
+      ],
+      "port": 4321
+    }
+  ]
+}

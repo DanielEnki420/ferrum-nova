@@ -1,0 +1,262 @@
+use crate::components::*;
+use crate::input::SelectionBox;
+use crate::units::BuildRequest;
+use bevy::prelude::*;
+use bevy::input::ButtonState;
+use bevy::input::mouse::MouseButtonInput;
+use bevy::ui::RelativeCursorPosition;
+
+/// Bau-Knopf im HUD. Ausgelöst direkt beim Drücken, damit auch sehr kurze Klicks
+/// (z. B. Trackpad-Tippen) zuverlässig ankommen.
+#[derive(Component)]
+pub struct BuildButton(pub UnitKind);
+
+pub const TOP_BAR_H: f32 = 36.0;
+pub const BOTTOM_PANEL_H: f32 = 96.0;
+
+#[derive(Component)]
+pub struct StockText;
+#[derive(Component)]
+pub struct QueueText;
+#[derive(Component)]
+pub struct SelectionText;
+#[derive(Component)]
+pub struct OutcomeText;
+
+const PANEL: Color = Color::srgba(0.05, 0.07, 0.10, 0.88);
+const BTN: Color = Color::srgb(0.14, 0.20, 0.28);
+const BTN_HOVER: Color = Color::srgb(0.20, 0.30, 0.42);
+const BTN_PRESS: Color = Color::srgb(0.30, 0.55, 0.45);
+
+fn label(text: impl Into<String>, size: f32) -> impl Bundle {
+    (
+        Text::new(text),
+        TextFont {
+            font_size: FontSize::Px(size),
+            ..default()
+        },
+        TextColor(Color::srgb(0.88, 0.92, 0.96)),
+    )
+}
+
+fn build_button(kind: UnitKind, key: &str) -> impl Bundle {
+    let c = kind.cost();
+    let text = format!("[{key}] {}\n{} F / {} P", kind.short_name(), c[0], c[1]);
+    (
+        BuildButton(kind),
+        RelativeCursorPosition::default(),
+        Node {
+            width: px(150),
+            flex_shrink: 0.0,
+            height: px(56),
+            padding: UiRect::all(px(6)),
+            margin: UiRect::right(px(8)),
+            border: UiRect::all(px(1)),
+            border_radius: BorderRadius::all(px(6)),
+            justify_content: JustifyContent::Center,
+            align_items: AlignItems::Center,
+            ..default()
+        },
+        BorderColor::all(Color::srgb(0.35, 0.5, 0.65)),
+        BackgroundColor(BTN),
+        children![label(text, 14.0)],
+    )
+}
+
+pub fn setup_hud(mut commands: Commands) {
+    // Obere Leiste
+    commands.spawn((
+        Node {
+            position_type: PositionType::Absolute,
+            top: px(0),
+            left: px(0),
+            width: percent(100),
+            height: px(TOP_BAR_H),
+            padding: UiRect::horizontal(px(14)),
+            align_items: AlignItems::Center,
+            justify_content: JustifyContent::SpaceBetween,
+            ..default()
+        },
+        BackgroundColor(PANEL),
+        children![
+            label_col("FERRUM NOVA", 16.0, Color::srgb(0.55, 0.85, 1.0)),
+            (label("", 16.0), StockText),
+            label("WASD Kamera | Q/E drehen | Rad Zoom | Leertaste Basis", 13.0),
+        ],
+    ));
+
+    // Untere Leiste
+    commands.spawn((
+        Node {
+            position_type: PositionType::Absolute,
+            bottom: px(0),
+            left: px(0),
+            width: percent(100),
+            height: px(BOTTOM_PANEL_H),
+            padding: UiRect::all(px(12)),
+            align_items: AlignItems::Center,
+            ..default()
+        },
+        BackgroundColor(PANEL),
+        children![
+            build_button(UnitKind::Sammler, "1"),
+            build_button(UnitKind::Panzer, "2"),
+            build_button(UnitKind::Werfer, "3"),
+            (
+                Node {
+                    flex_direction: FlexDirection::Column,
+                    margin: UiRect::left(px(12)),
+                    row_gap: px(6),
+                    ..default()
+                },
+                children![(label("", 14.0), QueueText), (label("", 14.0), SelectionText)],
+            ),
+        ],
+    ));
+
+    // Auswahlbox
+    commands.spawn((
+        Node {
+            position_type: PositionType::Absolute,
+            border: UiRect::all(px(1)),
+            ..default()
+        },
+        BorderColor::all(Color::srgb(0.4, 1.0, 0.5)),
+        BackgroundColor(Color::srgba(0.4, 1.0, 0.5, 0.08)),
+        Visibility::Hidden,
+        SelectionBox,
+    ));
+
+    // Sieg/Niederlage
+    commands.spawn((
+        Node {
+            position_type: PositionType::Absolute,
+            width: percent(100),
+            top: percent(40),
+            justify_content: JustifyContent::Center,
+            ..default()
+        },
+        children![(label("", 54.0), OutcomeText)],
+    ));
+}
+
+pub fn build_buttons(
+    mut clicks: MessageReader<MouseButtonInput>,
+    mouse: Res<ButtonInput<MouseButton>>,
+    mut q: Query<(&BuildButton, &RelativeCursorPosition, &mut BackgroundColor)>,
+    mut w: MessageWriter<BuildRequest>,
+) {
+    let pressed_now = clicks
+        .read()
+        .any(|c| c.button == MouseButton::Left && c.state == ButtonState::Pressed);
+    for (btn, rel, mut bg) in &mut q {
+        let over = rel.cursor_over();
+        if over && pressed_now {
+            w.write(BuildRequest { team: PLAYER, kind: btn.0 });
+        }
+        *bg = if over && (pressed_now || mouse.pressed(MouseButton::Left)) {
+            BTN_PRESS
+        } else if over {
+            BTN_HOVER
+        } else {
+            BTN
+        }
+        .into();
+    }
+}
+
+pub fn build_hotkeys(keys: Res<ButtonInput<KeyCode>>, mut w: MessageWriter<BuildRequest>) {
+    for (k, kind) in [
+        (KeyCode::Digit1, UnitKind::Sammler),
+        (KeyCode::Digit2, UnitKind::Panzer),
+        (KeyCode::Digit3, UnitKind::Werfer),
+    ] {
+        if keys.just_pressed(k) {
+            w.write(BuildRequest { team: PLAYER, kind });
+        }
+    }
+}
+
+#[allow(clippy::type_complexity)]
+pub fn update_hud(
+    stock: Res<Stock>,
+    outcome: Res<Outcome>,
+    hqs: Query<(&Team, &Hq)>,
+    units: Query<(&Team, &Unit, Has<Selected>)>,
+    mut texts: ParamSet<(
+        Query<&mut Text, With<StockText>>,
+        Query<&mut Text, With<QueueText>>,
+        Query<&mut Text, With<SelectionText>>,
+        Query<&mut Text, With<OutcomeText>>,
+    )>,
+) {
+    let s = stock.0[PLAYER.0 as usize];
+    let count = units.iter().filter(|(t, _, _)| **t == PLAYER).count();
+    if let Ok(mut t) = texts.p0().single_mut() {
+        **t = format!("Ferrit: {}    Plasma: {}    Einheiten: {}", s[0], s[1], count);
+    }
+    let queue = hqs
+        .iter()
+        .find(|(t, _)| **t == PLAYER)
+        .map(|(_, hq)| {
+            if hq.queue.is_empty() {
+                "Bauschleife: leer".to_string()
+            } else {
+                let first = hq.queue[0];
+                let pct = (hq.progress / first.build_time() * 100.0) as u32;
+                let names: Vec<_> = hq.queue.iter().map(|k| k.name()).collect();
+                format!("Bauschleife ({pct}%): {}", names.join(", "))
+            }
+        })
+        .unwrap_or_default();
+    if let Ok(mut t) = texts.p1().single_mut() {
+        **t = queue;
+    }
+    let mut counts = [0; 3];
+    for (team, u, sel) in &units {
+        if sel && *team == PLAYER {
+            counts[u.kind as usize] += 1;
+        }
+    }
+    let sel_text = if counts.iter().sum::<i32>() == 0 {
+        "Links: auswaehlen | F: alle Kampfeinheiten | Rechts: bewegen/angreifen/abbauen | Strg+Rechts: Angriffsmarsch".to_string()
+    } else {
+        format!(
+            "Auswahl: {} Sammler, {} Panzer, {} Werfer",
+            counts[0], counts[1], counts[2]
+        )
+    };
+    if let Ok(mut t) = texts.p2().single_mut() {
+        **t = sel_text;
+    }
+    if let Ok(mut t) = texts.p3().single_mut() {
+        **t = match *outcome {
+            Outcome::Running => String::new(),
+            Outcome::Won => "SIEG - der Schwarm ist zerschlagen".into(),
+            Outcome::Lost => "NIEDERLAGE - die Basis ist gefallen".into(),
+        };
+    }
+}
+
+fn label_col(text: impl Into<String>, size: f32, color: Color) -> impl Bundle {
+    (
+        Text::new(text),
+        TextFont {
+            font_size: FontSize::Px(size),
+            ..default()
+        },
+        TextColor(color),
+    )
+}
+
+/// HUD auf kleinen Fenstern (Laptop, Tablet, eingebettet) verkleinern
+pub fn scale_ui(
+    window: Query<&Window, With<bevy::window::PrimaryWindow>>,
+    mut ui_scale: ResMut<UiScale>,
+) {
+    let Ok(win) = window.single() else { return };
+    let s = (win.width() / 1150.0).clamp(0.55, 1.0);
+    if (ui_scale.0 - s).abs() > 0.01 {
+        ui_scale.0 = s;
+    }
+}

@@ -1,0 +1,53 @@
+---
+interface Props { title: string; description?: string; full?: boolean }
+const { title, description = 'Ferrum Nova – Echtzeitstrategie im Browser, gebaut mit Rust und Bevy.', full = false } = Astro.props;
+---
+<html lang="de">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <meta name="description" content={description} />
+    <title>{title}</title>
+  </head>
+  <body class={full ? 'full' : ''}>
+    <header>
+      <a class="brand" href="/">FERRUM<span>NOVA</span></a>
+      <nav>
+        <a href="/#spiel">Das Spiel</a>
+        <a href="/#steuerung">Steuerung</a>
+        <a class="cta" href="/spielen">Jetzt spielen</a>
+      </nav>
+    </header>
+    <slot />
+  </body>
+</html>
+
+<style is:global>
+  :root {
+    --bg: #0b0e13;
+    --panel: #121822;
+    --line: #233041;
+    --text: #dbe4ee;
+    --muted: #8b9bb0;
+    --blue: #4f8cf2;
+    --cyan: #8fd8ff;
+    --red: #e0444f;
+    --green: #4fe0b0;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; background: var(--bg); color: var(--text);
+    font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif; }
+  a { color: inherit; }
+  header { display: flex; align-items: center; justify-content: space-between; gap: 16px;
+    padding: 14px 24px; border-bottom: 1px solid var(--line); background: rgba(11,14,19,.9);
+    position: sticky; top: 0; z-index: 10; }
+  .brand { font-weight: 800; letter-spacing: .18em; text-decoration: none; color: var(--cyan); }
+  .brand span { color: var(--text); margin-left: .35em; }
+  nav { display: flex; gap: 18px; align-items: center; flex-wrap: wrap; }
+  nav a { text-decoration: none; color: var(--muted); font-size: 15px; }
+  nav a:hover { color: var(--text); }
+  nav a.cta { color: #fff; background: var(--blue); padding: 8px 14px; border-radius: 6px; }
+  body.full { height: 100vh; display: flex; flex-direction: column; overflow: hidden; }
+  @media (max-width: 560px) { nav a:not(.cta) { display: none; } }
+</style>
