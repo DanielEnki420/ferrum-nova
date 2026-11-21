@@ -250,20 +250,20 @@ fn pos_of(app: &App, e: Entity) -> Vec3 {
 /// Konter: gegen Geschütztürme Artillerie, gegen viel Panzerung Raketen und schwere Panzer
 #[test]
 fn ai_counters_what_it_sees() {
-    let none = [0usize; 6];
+    let none = [0.0f32; 6];
     let mut army = [0usize; 6];
     army[UnitKind::Panzer.idx()] = 3;
     army[UnitKind::Werfer.idx()] = 2;
     army[UnitKind::Spaeher.idx()] = 1;
     assert_eq!(choose_unit(&army, &none, 3, true), UnitKind::Haubitze, "Türme mit Fabrik");
     assert_eq!(choose_unit(&army, &none, 3, false), UnitKind::Werfer, "Türme ohne Fabrik");
-    let mut armor = [0usize; 6];
-    armor[UnitKind::Bollwerk.idx()] = 4;
-    armor[UnitKind::Panzer.idx()] = 4;
+    let mut armor = [0.0f32; 6];
+    armor[UnitKind::Bollwerk.idx()] = 4.0;
+    armor[UnitKind::Panzer.idx()] = 4.0;
     let pick = choose_unit(&army, &armor, 0, true);
     assert!(matches!(pick, UnitKind::Bollwerk | UnitKind::Werfer), "gegen Panzerung: {pick:?}");
-    let mut arty = [0usize; 6];
-    arty[UnitKind::Haubitze.idx()] = 5;
+    let mut arty = [0.0f32; 6];
+    arty[UnitKind::Haubitze.idx()] = 5.0;
     let mut no_scouts = army;
     no_scouts[UnitKind::Spaeher.idx()] = 0;
     assert_eq!(choose_unit(&no_scouts, &arty, 0, false), UnitKind::Spaeher, "gegen Artillerie");

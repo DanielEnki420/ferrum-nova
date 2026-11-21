@@ -159,7 +159,7 @@ fn scout_route() -> Vec<Vec3> {
 
 /// Welcher Kampftyp als Nächstes? Gewichte aus Grundmischung und Kontern gegen das Gesehene,
 /// gebaut wird der Typ, der in der eigenen Armee am meisten fehlt.
-pub fn choose_unit(own: &[usize; 6], seen: &[usize; 6], turrets_seen: usize, factory: bool) -> UnitKind {
+pub fn choose_unit(own: &[usize; 6], seen: &[f32; 6], turrets_seen: usize, factory: bool) -> UnitKind {
     use UnitKind::*;
     let mut w = [0.0f32; 6];
     w[Panzer.idx()] = 3.0;
@@ -177,7 +177,7 @@ pub fn choose_unit(own: &[usize; 6], seen: &[usize; 6], turrets_seen: usize, fac
         w[Werfer.idx()] += 1.5 * t;
     }
     // viel Panzerung: Raketen und schwere Panzer
-    let heavy = (seen[Panzer.idx()] + 2 * seen[Bollwerk.idx()]) as f32;
+    let heavy = seen[Panzer.idx()] + 2.0 * seen[Bollwerk.idx()];
     w[Werfer.idx()] += 0.5 * heavy;
     if factory {
         w[Bollwerk.idx()] += 0.6 * heavy;
@@ -185,9 +185,9 @@ pub fn choose_unit(own: &[usize; 6], seen: &[usize; 6], turrets_seen: usize, fac
         w[Panzer.idx()] += 0.4 * heavy;
     }
     // schnelle Späher: Panzer halten sie auf
-    w[Panzer.idx()] += 0.6 * seen[Spaeher.idx()] as f32;
+    w[Panzer.idx()] += 0.6 * seen[Spaeher.idx()];
     // Artillerie: schnelle Späher fahren sie an
-    w[Spaeher.idx()] += 0.8 * (seen[Werfer.idx()] + seen[Haubitze.idx()]) as f32;
+    w[Spaeher.idx()] += 0.8 * (seen[Werfer.idx()] + seen[Haubitze.idx()]);
 
     let total_w: f32 = w.iter().sum();
     let total_own: usize = own.iter().enumerate().filter(|(i, _)| *i != Sammler.idx()).map(|(_, n)| n).sum();
@@ -241,6 +241,7 @@ pub fn enemy_ai(
     mut harvesters: Query<(Entity, &Transform, &Team, &mut Harvester)>,
     hqs: Query<(&Team, &Hq)>,
     nodes: Query<(Entity, &Transform, &ResourceNode)>,
+    memory: Option<Res<crate::vaar::VaarMemory>>,
 ) {
     if *outcome != Outcome::Running {
         return;
@@ -337,6 +338,13 @@ pub fn enemy_ai(
             _ => {}
         }
     }
+    // Gedächtnis aus früheren Partien (vaar.rs): Vorwissen, das mit eigener Sicht verblasst
+    let mem = memory.as_deref();
+    let seen_total: usize = seen.iter().enumerate().filter(|(i, _)| *i != UnitKind::Sammler.idx()).map(|(_, n)| n).sum();
+    let prior = mem.map_or([0.0; 6], |m| m.prior(seen_total));
+    let seenf: [f32; 6] = std::array::from_fn(|i| seen[i] as f32 + prior[i]);
+    let expects_rush = mem.is_some_and(|m| m.expects_rush());
+    let expects_turtle = mem.is_some_and(|m| m.expects_turtle());
     let count = |k: BuildingKind| my_buildings.iter().filter(|o| o.building.is_some_and(|b| b.1 == Some(k))).count();
     let factory_ready = my_buildings.iter().any(|o| o.building.is_some_and(|b| b.1 == Some(BuildingKind::Fabrik)) && !o.constructing);
     let refineries = count(BuildingKind::Raffinerie);
@@ -350,9 +358,11 @@ pub fn enemy_ai(
 
     // ------------------------------------------------------------ Gebäude
     ai.build_cd -= 1.0;
-    let wants_heavy = turrets_seen >= 2 || seen[UnitKind::Panzer.idx()] + 2 * seen[UnitKind::Bollwerk.idx()] >= 4;
+    let wants_heavy = expects_turtle || turrets_seen >= 2 || seen[UnitKind::Panzer.idx()] + 2 * seen[UnitKind::Bollwerk.idx()] >= 4;
     let recent_threat = now - ai.last_threat < 60.0;
-    let turrets_wanted = if now < 80.0 { 0 } else { (1 + ((now - 80.0) / 70.0) as usize + recent_threat as usize).min(5) };
+    // gegen frühe Angreifer steht der erste Turm eher
+    let first_turret = if expects_rush { 45.0 } else { 80.0 };
+    let turrets_wanted = if now < first_turret { 0 } else { (1 + ((now - first_turret) / 70.0) as usize + recent_threat as usize).min(5) };
     // Raketentürme erst, wenn die Wirtschaft läuft: einer ab Minute 4,5, dann alle 2,5 Minuten einer mehr
     let rockets_wanted = if now < 270.0 { 0 } else { (1 + ((now - 270.0) / 150.0) as usize).min(3) };
     let site_list: Vec<Site> = objs
@@ -376,7 +386,7 @@ pub fn enemy_ai(
         .map(|o| o.pos);
     let turret_near = |p: Vec3| my_buildings.iter().any(|o| o.building.is_some_and(|b| b.1 == Some(BuildingKind::Geschuetzturm)) && o.pos.distance(p) < 14.0);
 
-    let front = ai.threat_dir.filter(|_| recent_threat).unwrap_or(to_player());
+    let front = ai.threat_dir.filter(|_| recent_threat).or(mem.and_then(|m| m.expected_front())).unwrap_or(to_player());
     let goal: Option<(BuildingKind, Vec3)> = if refineries == 0 && now > 35.0 {
         // zwischen HQ und dem nächsten Feld
         let field = node_pos.iter().min_by(|a, b| a.distance(ENEMY_HQ_POS).total_cmp(&b.distance(ENEMY_HQ_POS))).copied().unwrap_or(ENEMY_HQ_POS);
@@ -445,7 +455,7 @@ pub fn enemy_ai(
         } else if !scout_alive && own[UnitKind::Spaeher.idx()] == 0 {
             UnitKind::Spaeher
         } else {
-            choose_unit(&own, &seen, turrets_seen, factory_ready)
+            choose_unit(&own, &seenf, turrets_seen, factory_ready)
         };
         builds.write(BuildRequest { team: ENEMY, kind });
     }

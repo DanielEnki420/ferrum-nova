@@ -27,6 +27,7 @@ mod sky;
 mod splat;
 mod terrain;
 mod units;
+mod vaar;
 mod vegetation;
 mod vehicles;
 mod world;
@@ -65,6 +66,8 @@ fn main() {
         .insert_resource(Rng(0x2545_F491_4F6C_DD1D))
         .insert_resource(Stock([[200, 50], [200, 50]]))
         .init_resource::<Outcome>()
+        .insert_resource(vaar::VaarMemory::load(&config))
+        .init_resource::<vaar::VaarObs>()
         .insert_resource(config)
         .insert_resource(audio::SoundPrefs::load())
         .add_message::<audio::PlaySfx>()
@@ -91,7 +94,7 @@ fn main() {
         .add_message::<fx::FxEvent>()
         .add_systems(Startup, fog::setup_fog.before(world::setup_world).before(vegetation::setup_vegetation))
         .add_systems(Startup, (world::setup_world, input::setup_camera, hud::setup_hud, hud::setup_perf, minimap::setup_minimap, splat::load_terrain_textures, vegetation::setup_vegetation, atmo::setup_atmo, frame::setup_frame, frame::autostart, audio::setup_audio))
-        .add_systems(Startup, (campaign::setup_mission.after(world::setup_world), campaign::setup_mission_hud.after(hud::setup_hud), halkyon::setup_eclipse_hud.after(hud::setup_hud)))
+        .add_systems(Startup, (campaign::setup_mission.after(world::setup_world), campaign::setup_mission_hud.after(hud::setup_hud), halkyon::setup_eclipse_hud.after(hud::setup_hud), vaar::setup_vaar_hud.after(hud::setup_hud)))
         .add_systems(
             Update,
             ((
@@ -161,6 +164,7 @@ fn main() {
                 splat::finish_terrain,
             ),
         )
+        .add_systems(Update, (vaar::observe, vaar::conclude, vaar::taunts).chain().after(units::check_outcome))
         .add_systems(Update, ((era::era_keys, era::apply_era).chain(), (halkyon::update_eclipse, halkyon::eclipse_lights).chain().before(fog::update_fog)))
         // Optik: läuft auch nach Spielende weiter, damit Explosionen ausklingen
         .add_systems(

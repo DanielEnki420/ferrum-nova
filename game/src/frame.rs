@@ -244,6 +244,8 @@ pub enum FrameButton {
     Menu,
     Sound,
     Music,
+    /// VAARs Gedächtnis löschen (vaar.rs)
+    ForgetVaar,
     /// Zeitsprung 2026 / 1996
     Era,
     /// Kampagnen-Auswahl ein-/ausblenden
@@ -414,6 +416,7 @@ pub fn setup_frame(mut commands: Commands, cfg: Res<MatchConfig>) {
             button(FrameButton::Help, "Steuerung", 280.0),
             sound_row(),
             era_row(),
+            button(FrameButton::ForgetVaar, "VAAR vergessen lassen", 280.0),
         ],
     )]));
 
@@ -445,6 +448,7 @@ pub fn setup_frame(mut commands: Commands, cfg: Res<MatchConfig>) {
                 ],
             ),
             (text("", 16.0, TEXT), EndStory, TextLayout::justify(Justify::Center), Node { margin: UiRect::bottom(px(14)), max_width: px(640), ..default() }),
+            (text("", 14.0, DIM), crate::vaar::VaarReport, TextLayout::justify(Justify::Center), Node { margin: UiRect::bottom(px(12)), max_width: px(640), ..default() }),
             (
                 Node { flex_direction: FlexDirection::Row, ..default() },
                 children![
@@ -545,6 +549,7 @@ pub fn frame_buttons(
     mut sfx: MessageWriter<PlaySfx>,
     mut campaign: ResMut<CampaignShown>,
     mut era: ResMut<crate::era::Era>,
+    mut vaar: ResMut<crate::vaar::VaarMemory>,
 ) {
     for (c, mut t) in &mut captions {
         let (name, on) = match c.0 {
@@ -605,6 +610,7 @@ pub fn frame_buttons(
         FrameButton::Sound => prefs.sfx = !prefs.sfx,
         FrameButton::Music => prefs.music = !prefs.music,
         FrameButton::Era => *era = era.toggled(),
+        FrameButton::ForgetVaar => crate::vaar::forget(&mut vaar),
         FrameButton::Campaign => campaign.0 = !campaign.0,
         FrameButton::Mission(n) => relaunch(&MatchConfig { mission: n, autostart: false, ..cfg.clone() }),
         FrameButton::StartMission => {
