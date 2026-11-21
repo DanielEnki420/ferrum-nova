@@ -4,7 +4,43 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-bevy = "0.20.1"
+# Nur die Bevy-Teile, die das Spiel braucht (kleinere WebAssembly-Datei).
+# Weggelassen: 2D, Audio, Gamepads, Picking, Szenen, Animation, SMAA/FXAA.
+bevy = { version = "0.20.1", default-features = false, features = [
+    "default_app",
+    "std",
+    "multi_threaded",
+    "bevy_winit",
+    "bevy_window",
+    "webgl2",
+    "x11",
+    "wayland",
+    "default_font",
+    "bevy_camera",
+    "bevy_color",
+    "bevy_gizmos",
+    "bevy_gizmos_render",
+    "bevy_image",
+    "bevy_mesh",
+    "bevy_shader",
+    "bevy_material",
+    "bevy_text",
+    "bevy_light",
+    "bevy_mikktspace",
+    "bevy_render",
+    "bevy_core_pipeline",
+    "bevy_pbr",
+    "bevy_post_process",
+    "bevy_gltf",
+    "tonemapping_luts",
+    "ktx2",
+    "zstd_rust",
+    "png",
+    "jpeg",
+    "bevy_ui",
+    "bevy_ui_render",
+    "bevy_input_focus",
+] }
 
 # Schnellere Debug-Builds: eigener Code leicht optimiert, Abhängigkeiten voll
 [profile.dev]
@@ -15,7 +51,8 @@ opt-level = 3
 
 # Kleinere WebAssembly-Datei für den Browser
 [profile.release]
-opt-level = "s"
-lto = "thin"
+opt-level = "z"
+lto = "fat"
+panic = "abort"
 codegen-units = 1
 strip = true

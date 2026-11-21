@@ -2,32 +2,18 @@ use crate::components::*;
 use crate::fx::FxKit;
 use crate::models::{self, ModelKit};
 use crate::terrain::{self, FIELDS};
-use bevy::light::{CascadeShadowConfigBuilder, NotShadowCaster};
+use bevy::light::CascadeShadowConfigBuilder;
 use bevy::prelude::*;
 
 pub fn setup_world(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
     mut mats: ResMut<Assets<StandardMaterial>>,
-    mut images: ResMut<Assets<Image>>,
 ) {
     let kit = ModelKit::new(&mut meshes, &mut mats);
     commands.insert_resource(FxKit::new(&mut meshes, &mut mats));
 
-    // Gelände
-    let (albedo, normal_map) = terrain::build_textures();
-    commands.spawn((
-        Mesh3d(meshes.add(terrain::build_mesh())),
-        MeshMaterial3d(mats.add(StandardMaterial {
-            base_color_texture: Some(images.add(albedo)),
-            normal_map_texture: Some(images.add(normal_map)),
-            perceptual_roughness: 0.96,
-            reflectance: 0.25,
-            ..default()
-        })),
-        Transform::default(),
-        NotShadowCaster,
-    ));
+    // Das Gelände selbst entsteht in splat::finish_terrain, sobald die Texturen geladen sind
 
     // Sonne: tief stehend und warm, für lange Schatten
     commands.spawn((
@@ -52,13 +38,22 @@ pub fn setup_world(
         ..default()
     });
 
-    // Felsen und Geröll
-    let rock_meshes: Vec<Handle<Mesh>> = (0..6).map(|s| meshes.add(terrain::rock_mesh(s + 1))).collect();
-    let rock_mats = [
-        mats.add(StandardMaterial { base_color: Color::srgb(0.34, 0.31, 0.27), perceptual_roughness: 0.93, ..default() }),
-        mats.add(StandardMaterial { base_color: Color::srgb(0.27, 0.25, 0.23), perceptual_roughness: 0.9, ..default() }),
-        mats.add(StandardMaterial { base_color: Color::srgb(0.42, 0.37, 0.30), perceptual_roughness: 0.95, ..default() }),
+    // Felsen und Geröll: statisch, daher pro Kartenkachel zu einem einzigen Mesh
+    // zusammengefasst (WebGL2 zahlt für jeden Zeichenaufruf, im Schattendurchgang doppelt).
+    // Die Farbvarianten stecken in den Vertexfarben, so reicht ein Material.
+    let rock_shapes: Vec<Mesh> = (0..6).map(|s| terrain::rock_mesh(s + 1)).collect();
+    let rock_tints = [
+        LinearRgba::from(Color::srgb(0.34, 0.31, 0.27)),
+        LinearRgba::from(Color::srgb(0.27, 0.25, 0.23)),
+        LinearRgba::from(Color::srgb(0.42, 0.37, 0.30)),
     ];
+    let rock_mat = mats.add(StandardMaterial { perceptual_roughness: 0.93, ..default() });
+    const CHUNKS: usize = 5;
+    let chunk_of = |p: Vec3| {
+        let f = |v: f32| (((v + terrain::TERRAIN_HALF) / (2.0 * terrain::TERRAIN_HALF) * CHUNKS as f32) as usize).min(CHUNKS - 1);
+        f(p.z) * CHUNKS + f(p.x)
+    };
+    let mut chunks: Vec<Option<Mesh>> = (0..CHUNKS * CHUNKS).map(|_| None).collect();
     let mut rng = Rng(0x9E37_79B9_7F4A_7C15);
     let mut placed = 0;
     while placed < 230 {
@@ -82,13 +77,23 @@ pub fn setup_world(
         let s = if r < 0.55 { rng.range(0.25, 0.7) } else if r < 0.9 { rng.range(0.8, 1.8) } else { rng.range(2.0, 4.0) };
         let s = if edge_zone { s * 2.2 } else { s };
         let g = terrain::on_ground(p);
-        commands.spawn((
-            Mesh3d(rock_meshes[(rng.next_f32() * 6.0) as usize % 6].clone()),
-            MeshMaterial3d(rock_mats[(rng.next_f32() * 3.0) as usize % 3].clone()),
-            Transform::from_translation(g - Vec3::Y * s * 0.15)
-                .with_scale(Vec3::new(s * rng.range(0.8, 1.3), s, s * rng.range(0.8, 1.3)))
-                .with_rotation(Quat::from_rotation_y(rng.range(0.0, std::f32::consts::TAU))),
-        ));
+        let shape = (rng.next_f32() * 6.0) as usize % 6;
+        let tint = rock_tints[(rng.next_f32() * 3.0) as usize % 3];
+        let tf = Transform::from_translation(g - Vec3::Y * s * 0.15)
+            .with_scale(Vec3::new(s * rng.range(0.8, 1.3), s, s * rng.range(0.8, 1.3)))
+            .with_rotation(Quat::from_rotation_y(rng.range(0.0, std::f32::consts::TAU)));
+        let mut m = rock_shapes[shape].clone().transformed_by(tf);
+        let n = m.count_vertices();
+        m.insert_attribute(Mesh::ATTRIBUTE_COLOR, vec![tint.to_f32_array(); n]);
+        match &mut chunks[chunk_of(g)] {
+            Some(acc) => {
+                let _ = acc.merge(&m);
+            }
+            slot => *slot = Some(m),
+        }
+    }
+    for m in chunks.into_iter().flatten() {
+        commands.spawn((Mesh3d(meshes.add(m)), MeshMaterial3d(rock_mat.clone())));
     }
 
     // Rohstofffelder

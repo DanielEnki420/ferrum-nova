@@ -2,9 +2,9 @@
 //! Vorne ist bei allen Modellen -Z, der Ursprung liegt auf dem Boden.
 
 use crate::components::*;
+use crate::vehicles::{self, VehicleMeshes};
 use bevy::light::NotShadowCaster;
 use bevy::prelude::*;
-use std::f32::consts::FRAC_PI_2;
 
 #[derive(Resource)]
 pub struct ModelKit {
@@ -21,12 +21,15 @@ pub struct ModelKit {
     pub tracer_mat: [Handle<StandardMaterial>; 2],
     pub rocket_mat: [Handle<StandardMaterial>; 2],
     pub metal: Handle<StandardMaterial>,
-    pub rubber: Handle<StandardMaterial>,
     pub glass: Handle<StandardMaterial>,
     pub concrete: Handle<StandardMaterial>,
     pub ferrit: Handle<StandardMaterial>,
     pub plasma: Handle<StandardMaterial>,
     pub crater: Handle<StandardMaterial>,
+    /// Detailmodelle je Typ (Sammler, Panzer, Werfer) und Team
+    pub vehicles: [[VehicleMeshes; 2]; 3],
+    /// Fahrzeuglack: Farbe kommt aus den Vertexfarben
+    pub vehicle_mat: Handle<StandardMaterial>,
 }
 
 impl ModelKit {
@@ -81,11 +84,6 @@ impl ModelKit {
                 perceptual_roughness: 0.38,
                 ..default()
             }),
-            rubber: mats.add(StandardMaterial {
-                base_color: Color::srgb(0.06, 0.06, 0.06),
-                perceptual_roughness: 0.95,
-                ..default()
-            }),
             glass: mats.add(StandardMaterial {
                 base_color: Color::srgb(0.05, 0.09, 0.14),
                 perceptual_roughness: 0.06,
@@ -115,6 +113,17 @@ impl ModelKit {
                 perceptual_roughness: 0.95,
                 ..default()
             }),
+            vehicles: [
+                [vehicles::build_sammler(PLAYER, meshes), vehicles::build_sammler(ENEMY, meshes)],
+                [vehicles::build_panzer(PLAYER, meshes), vehicles::build_panzer(ENEMY, meshes)],
+                [vehicles::build_werfer(PLAYER, meshes), vehicles::build_werfer(ENEMY, meshes)],
+            ],
+            vehicle_mat: mats.add(StandardMaterial {
+                perceptual_roughness: 0.58,
+                metallic: 0.22,
+                reflectance: 0.45,
+                ..default()
+            }),
         }
     }
 }
@@ -136,124 +145,34 @@ fn tf(x: f32, y: f32, z: f32, sx: f32, sy: f32, sz: f32) -> Transform {
     Transform::from_xyz(x, y, z).with_scale(Vec3::new(sx, sy, sz))
 }
 
-/// Ketten links und rechts
-fn tracks(c: &mut Commands, k: &ModelKit, root: Entity, t: usize, len: f32) {
-    for side in [-1.0, 1.0] {
-        let x = side * 0.72;
-        part(c, root, &k.cube, &k.rubber, tf(x, 0.27, 0.0, 0.42, 0.5, len));
-        part(c, root, &k.cube, &k.paint_dark[t], tf(x, 0.56, 0.0, 0.5, 0.08, len + 0.12));
-        // Laufrollen andeuten
-        let n = (len / 0.55) as i32;
-        for i in 0..n {
-            let z = -len / 2.0 + 0.3 + i as f32 * (len - 0.6) / (n - 1).max(1) as f32;
-            part(
-                c,
-                root,
-                &k.cyl8,
-                &k.metal,
-                Transform::from_xyz(x + side * 0.22, 0.24, z)
-                    .with_rotation(Quat::from_rotation_z(FRAC_PI_2))
-                    .with_scale(Vec3::new(0.36, 0.04, 0.36)),
-            );
-        }
-    }
-}
-
 /// Baut das Modell an `root` und gibt den Turm (falls vorhanden) zurück
 pub fn build_unit(c: &mut Commands, k: &ModelKit, root: Entity, team: Team, kind: UnitKind) -> Option<Entity> {
     let t = team.0 as usize;
-    match kind {
-        UnitKind::Panzer => {
-            tracks(c, k, root, t, 2.7);
-            part(c, root, &k.cube, &k.paint[t], tf(0.0, 0.62, 0.05, 1.1, 0.42, 2.4));
-            part(
-                c,
-                root,
-                &k.cube,
-                &k.paint[t],
-                Transform::from_xyz(0.0, 0.6, -1.28)
-                    .with_rotation(Quat::from_rotation_x(-0.5))
-                    .with_scale(Vec3::new(1.1, 0.12, 0.6)),
-            );
-            part(c, root, &k.cube, &k.metal, tf(0.0, 0.87, 0.85, 0.9, 0.1, 0.6));
-            let turret = c
-                .spawn((
-                    Transform::from_xyz(0.0, 0.86, 0.1),
-                    Visibility::default(),
-                    Turret { tilt: 0.0, base_y: 0.86, base_z: 0.1 },
-                ))
-                .id();
-            c.entity(root).add_child(turret);
-            part(c, turret, &k.cyl, &k.paint[t], tf(0.0, 0.16, 0.0, 1.0, 0.32, 1.0));
-            part(c, turret, &k.cube, &k.paint[t], tf(0.0, 0.15, -0.45, 0.7, 0.28, 0.5));
-            let barrel = Quat::from_rotation_x(FRAC_PI_2);
-            part(c, turret, &k.cyl, &k.metal, Transform::from_xyz(0.0, 0.16, -1.35).with_rotation(barrel).with_scale(Vec3::new(0.14, 1.5, 0.14)));
-            part(c, turret, &k.cyl, &k.metal, Transform::from_xyz(0.0, 0.16, -2.1).with_rotation(barrel).with_scale(Vec3::new(0.22, 0.24, 0.22)));
-            part(c, turret, &k.cyl, &k.paint_dark[t], tf(0.2, 0.34, 0.15, 0.35, 0.08, 0.35));
-            part(c, turret, &k.cyl8, &k.metal, tf(-0.35, 0.8, 0.3, 0.03, 1.0, 0.03));
-            part(c, turret, &k.cube, &k.glow[t], tf(0.0, 0.2, 0.52, 0.5, 0.05, 0.04));
-            Some(turret)
-        }
-        UnitKind::Werfer => {
-            tracks(c, k, root, t, 2.3);
-            part(c, root, &k.cube, &k.paint[t], tf(0.0, 0.64, 0.0, 1.1, 0.48, 2.1));
-            part(c, root, &k.cube, &k.paint_dark[t], tf(0.0, 0.95, -0.75, 0.9, 0.25, 0.5));
-            let turret = c
-                .spawn((
-                    Transform::from_xyz(0.0, 1.05, 0.25),
-                    Visibility::default(),
-                    Turret { tilt: 0.35, base_y: 1.05, base_z: 0.25 },
-                ))
-                .id();
-            c.entity(root).add_child(turret);
-            // Werfergehäuse mit 2x3 Raketen
-            part(c, turret, &k.cube, &k.paint[t], tf(0.0, 0.3, 0.0, 1.1, 0.62, 1.3));
-            part(c, turret, &k.cube, &k.metal, tf(0.0, 0.3, -0.66, 1.0, 0.52, 0.05));
-            for xi in [-0.32, 0.0, 0.32] {
-                for yi in [0.17, 0.43] {
-                    part(c, turret, &k.sphere, &k.rocket_mat[t], tf(xi, yi, -0.69, 0.16, 0.16, 0.1));
-                }
-            }
-            for side in [-1.0, 1.0] {
-                part(c, turret, &k.cube, &k.metal, tf(side * 0.6, 0.0, 0.2, 0.12, 0.4, 0.6));
-            }
-            part(c, root, &k.cube, &k.glow[t], tf(0.0, 0.9, 1.06, 0.6, 0.05, 0.04));
-            Some(turret)
-        }
-        UnitKind::Sammler => {
-            for side in [-1.0, 1.0] {
-                for z in [-0.85, 0.05, 0.9] {
-                    part(
-                        c,
-                        root,
-                        &k.cyl,
-                        &k.rubber,
-                        Transform::from_xyz(side * 0.72, 0.32, z)
-                            .with_rotation(Quat::from_rotation_z(FRAC_PI_2))
-                            .with_scale(Vec3::new(0.64, 0.26, 0.64)),
-                    );
-                    part(
-                        c,
-                        root,
-                        &k.cyl8,
-                        &k.metal,
-                        Transform::from_xyz(side * 0.86, 0.32, z)
-                            .with_rotation(Quat::from_rotation_z(FRAC_PI_2))
-                            .with_scale(Vec3::new(0.3, 0.02, 0.3)),
-                    );
-                }
-            }
-            part(c, root, &k.cube, &k.metal, tf(0.0, 0.56, 0.0, 1.25, 0.22, 2.5));
-            part(c, root, &k.cube, &k.paint[t], tf(0.0, 0.98, -0.85, 1.2, 0.62, 0.75));
-            part(c, root, &k.cube, &k.glass, tf(0.0, 1.08, -1.23, 1.05, 0.3, 0.04));
-            part(c, root, &k.cube, &k.glass, tf(0.61, 1.08, -0.85, 0.02, 0.28, 0.55));
-            part(c, root, &k.cube, &k.glass, tf(-0.61, 1.08, -0.85, 0.02, 0.28, 0.55));
-            part(c, root, &k.cube, &k.paint_dark[t], tf(0.0, 0.97, 0.4, 1.25, 0.62, 1.45));
-            part(c, root, &k.cube, &k.paint[t], tf(0.0, 1.3, 0.4, 1.32, 0.06, 1.52));
-            part(c, root, &k.sphere, &k.glow[t], tf(0.42, 1.36, -0.85, 0.16, 0.12, 0.16));
-            None
-        }
+    let (vm, turret_base) = match kind {
+        UnitKind::Sammler => (&k.vehicles[0][t], None),
+        UnitKind::Panzer => (&k.vehicles[1][t], Some(Turret { tilt: 0.0, base_y: 0.86, base_z: 0.1 })),
+        UnitKind::Werfer => (&k.vehicles[2][t], Some(Turret { tilt: 0.35, base_y: 1.05, base_z: 0.25 })),
+    };
+    part(c, root, &vm.hull, &k.vehicle_mat, Transform::default());
+    if let Some(m) = &vm.hull_glow {
+        part(c, root, m, &k.glow[t], Transform::default());
     }
+    if let Some(m) = &vm.glass {
+        part(c, root, m, &k.glass, Transform::default());
+    }
+    let turret = turret_base?;
+    let pivot = c
+        .spawn((Transform::from_xyz(0.0, turret.base_y, turret.base_z), Visibility::default(), turret))
+        .id();
+    c.entity(root).add_child(pivot);
+    if let Some(m) = &vm.turret {
+        part(c, pivot, m, &k.vehicle_mat, Transform::default());
+    }
+    if let Some(m) = &vm.turret_glow {
+        let mat = if kind == UnitKind::Werfer { &k.rocket_mat[t] } else { &k.glow[t] };
+        part(c, pivot, m, mat, Transform::default());
+    }
+    Some(pivot)
 }
 
 /// Hauptquartier

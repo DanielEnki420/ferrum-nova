@@ -10,8 +10,11 @@ mod fx;
 mod hud;
 mod input;
 mod models;
+mod splat;
 mod terrain;
 mod units;
+mod vegetation;
+mod vehicles;
 mod world;
 
 use bevy::prelude::*;
@@ -30,7 +33,14 @@ fn main() {
                 ..default()
             }),
             ..default()
+        }).set(AssetPlugin {
+            // Im Browser keine .meta-Dateien anfragen (spart 404-Anfragen)
+            meta_check: bevy::asset::AssetMetaCheck::Never,
+            ..default()
         }))
+        .add_plugins(MaterialPlugin::<splat::TerrainMaterial>::default())
+        .add_plugins(MaterialPlugin::<vegetation::WindMaterial>::default())
+        .add_plugins(bevy::diagnostic::FrameTimeDiagnosticsPlugin::default())
         .insert_resource(ClearColor(input::HAZE))
         .insert_resource(bevy::light::DirectionalLightShadowMap { size: 4096 })
         .insert_resource(Rng(0x2545_F491_4F6C_DD1D))
@@ -42,7 +52,7 @@ fn main() {
         .init_resource::<ai::AiState>()
         .add_message::<units::BuildRequest>()
         .add_message::<fx::FxEvent>()
-        .add_systems(Startup, (world::setup_world, input::setup_camera, hud::setup_hud))
+        .add_systems(Startup, (world::setup_world, input::setup_camera, hud::setup_hud, hud::setup_perf, splat::load_terrain_textures, vegetation::setup_vegetation))
         .add_systems(
             Update,
             (
@@ -68,7 +78,7 @@ fn main() {
                 .chain()
                 .run_if(|o: Res<Outcome>| *o == Outcome::Running),
         )
-        .add_systems(Update, (input::draw_overlays, hud::build_buttons, hud::update_hud, hud::scale_ui))
+        .add_systems(Update, (input::draw_overlays, hud::build_buttons, hud::update_hud, hud::scale_ui, hud::update_perf, splat::finish_terrain))
         // Optik: läuft auch nach Spielende weiter, damit Explosionen ausklingen
         .add_systems(
             Update,

@@ -260,3 +260,50 @@ pub fn scale_ui(
         ui_scale.0 = s;
     }
 }
+
+/// Leistungsanzeige (F3 schaltet sie ein und aus)
+#[derive(Component)]
+pub struct PerfText;
+
+pub fn setup_perf(mut commands: Commands) {
+    commands.spawn((
+        Node {
+            position_type: PositionType::Absolute,
+            top: px(TOP_BAR_H + 6.0),
+            left: px(10),
+            padding: UiRect::axes(px(8), px(4)),
+            ..default()
+        },
+        BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.45)),
+        PerfText,
+        children![label_col("", 13.0, Color::srgb(0.6, 1.0, 0.6))],
+    ));
+}
+
+pub fn update_perf(
+    keys: Res<ButtonInput<KeyCode>>,
+    diags: Res<bevy::diagnostic::DiagnosticsStore>,
+    mut panel: Query<(&mut Visibility, &Children), With<PerfText>>,
+    mut texts: Query<&mut Text>,
+    entities: Query<Entity>,
+    time: Res<Time>,
+    mut timer: Local<f32>,
+) {
+    use bevy::diagnostic::FrameTimeDiagnosticsPlugin as F;
+    let Ok((mut vis, children)) = panel.single_mut() else { return };
+    if keys.just_pressed(KeyCode::F3) {
+        *vis = if *vis == Visibility::Hidden { Visibility::Inherited } else { Visibility::Hidden };
+    }
+    *timer -= time.delta_secs();
+    if *timer > 0.0 || *vis == Visibility::Hidden {
+        return;
+    }
+    *timer = 0.5;
+    let fps = diags.get(&F::FPS).and_then(|d| d.smoothed()).unwrap_or(0.0);
+    let ms = diags.get(&F::FRAME_TIME).and_then(|d| d.smoothed()).unwrap_or(0.0);
+    if let Some(&c) = children.first()
+        && let Ok(mut t) = texts.get_mut(c)
+    {
+        t.0 = format!("{fps:.0} FPS | {ms:.1} ms | {} Objekte", entities.iter().count());
+    }
+}

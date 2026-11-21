@@ -120,10 +120,6 @@ pub fn on_ground(p: Vec3) -> Vec3 {
 
 // ---------------------------------------------------------------- Mesh
 
-fn lin(r: f32, g: f32, b: f32) -> Vec3 {
-    let c = Color::srgb(r, g, b).to_linear();
-    Vec3::new(c.red, c.green, c.blue)
-}
 
 pub fn build_mesh() -> Mesh {
     let step = 1.0;
@@ -132,12 +128,6 @@ pub fn build_mesh() -> Mesh {
     let mut normals = Vec::with_capacity(n * n);
     let mut uvs = Vec::with_capacity(n * n);
     let mut colors = Vec::with_capacity(n * n);
-
-    let dust = lin(0.50, 0.46, 0.39);
-    let soil = lin(0.36, 0.32, 0.27);
-    let scrub = lin(0.36, 0.37, 0.28);
-    let rock = lin(0.42, 0.41, 0.39);
-    let peak = lin(0.62, 0.61, 0.59);
 
     for iz in 0..n {
         for ix in 0..n {
@@ -148,23 +138,7 @@ pub fn build_mesh() -> Mesh {
             positions.push([x, h, z]);
             normals.push(nrm.to_array());
             uvs.push([x / 14.0, z / 14.0]);
-
-            // Farbe aus Rauschen, Steigung und Höhe
-            let patch = fbm(x * 0.06, z * 0.06, 11, 4) * 0.5 + 0.5;
-            let fine = fbm(x * 0.35, z * 0.35, 23, 3) * 0.5 + 0.5;
-            let mut c = dust.lerp(soil, smoothstep(0.45, 0.75, patch));
-            c = c.lerp(scrub, smoothstep(0.55, 0.85, fine) * 0.45 * (1.0 - smoothstep(2.0, 6.0, h)));
-            let slope = 1.0 - nrm.y;
-            c = c.lerp(rock, smoothstep(0.12, 0.35, slope));
-            c = c.lerp(peak, smoothstep(18.0, 28.0, h) * 0.8);
-            // Fahrspuren-Dunkelung rund um die Basen
-            let mut wear = 0.0f32;
-            for hq in [PLAYER_HQ_POS, ENEMY_HQ_POS] {
-                let d = Vec2::new(x - hq.x, z - hq.z).length();
-                wear = wear.max(1.0 - smoothstep(6.0, 16.0, d));
-            }
-            c *= 1.0 - wear * 0.25 * fine;
-            colors.push([c.x, c.y, c.z, 1.0]);
+            colors.push(splat_weights(x, z, h, nrm));
         }
     }
 
@@ -179,16 +153,48 @@ pub fn build_mesh() -> Mesh {
         }
     }
 
-    let mut mesh = Mesh::new(PrimitiveTopology::TriangleList, RenderAssetUsages::RENDER_WORLD)
+    Mesh::new(PrimitiveTopology::TriangleList, RenderAssetUsages::RENDER_WORLD)
         .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, positions)
         .with_inserted_attribute(Mesh::ATTRIBUTE_NORMAL, normals)
         .with_inserted_attribute(Mesh::ATTRIBUTE_UV_0, uvs)
         .with_inserted_attribute(Mesh::ATTRIBUTE_COLOR, colors)
-        .with_inserted_indices(Indices::U32(indices));
-    if let Err(e) = mesh.generate_tangents() {
-        warn!("Tangenten für das Gelände fehlgeschlagen: {e:?}");
+        .with_inserted_indices(Indices::U32(indices))
+}
+
+/// Mischgewichte an einer beliebigen Stelle (für die Vegetation)
+pub fn weights_at(x: f32, z: f32) -> [f32; 4] {
+    splat_weights(x, z, height(x, z), normal(x, z))
+}
+
+/// Mischgewichte der Bodenschichten: Erde, Geröll, Fels, Gras (Summe 1)
+fn splat_weights(x: f32, z: f32, h: f32, nrm: Vec3) -> [f32; 4] {
+    let slope = 1.0 - nrm.y;
+    // gedrehte und verzerrte Koordinaten, damit keine Gitterkanten des Rauschens sichtbar sind
+    let (rx, rz) = (x * 0.8 - z * 0.6, x * 0.6 + z * 0.8);
+    let wx = rx + fbm(rx * 0.03, rz * 0.03, 41, 3) * 18.0;
+    let wz = rz + fbm(rx * 0.03 + 7.3, rz * 0.03 - 2.1, 43, 3) * 18.0;
+    let patch = fbm(wx * 0.045, wz * 0.045, 11, 4) * 0.5 + 0.5;
+    let fine = fbm(wx * 0.21, wz * 0.21, 23, 3) * 0.5 + 0.5;
+
+    // Fels an steilen Flanken und auf den Gipfeln
+    let rock = smoothstep(0.20, 0.40, slope).max(smoothstep(15.0, 26.0, h) * 0.8);
+    // Gras in flachen Senken, in Flecken
+    let mut grass = smoothstep(0.58, 0.78, patch)
+        * (1.0 - smoothstep(0.08, 0.22, slope))
+        * (1.0 - smoothstep(4.0, 10.0, h))
+        * (0.55 + 0.45 * fine);
+    // Geröll: Hangfüße, verstreute Flecken, Fahrspuren rund um die Basen
+    let mut gravel = smoothstep(0.55, 0.80, fine) * 0.8 + smoothstep(0.08, 0.20, slope) * 0.9;
+    for hq in [PLAYER_HQ_POS, ENEMY_HQ_POS] {
+        let d = Vec2::new(x - hq.x, z - hq.z).length();
+        let wear = 1.0 - smoothstep(7.0, 17.0, d);
+        gravel = gravel.max(wear * (0.5 + 0.5 * fine));
+        grass *= 1.0 - wear;
     }
-    mesh
+    let free = 1.0 - rock.min(1.0);
+    let w = [0.6 * free, gravel.min(1.0) * free, rock.min(1.0), grass.min(1.0) * free];
+    let sum = w.iter().sum::<f32>().max(1e-4);
+    w.map(|v| v / sum)
 }
 
 // ---------------------------------------------------------------- Texturen
