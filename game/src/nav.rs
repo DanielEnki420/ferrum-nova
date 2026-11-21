@@ -425,17 +425,22 @@ impl PathQueue {
 /// Hindernisse sammeln und das Raster neu aufbauen, wenn Gebäude dazukommen oder verschwinden
 pub fn update_grid(
     mut grid: ResMut<NavGrid>,
-    added: Query<(), Added<Building>>,
-    mut removed: RemovedComponents<Building>,
-    q: Query<(Entity, &Transform, &Building, &Team, Has<Wall>, Has<Gate>)>,
+    q: Query<(Entity, &Transform, &Building, &Team, Has<Wall>, Has<Gate>, Option<&NetId>)>,
+    mut last: Local<Option<(usize, u64)>>,
 ) {
-    let changed = !added.is_empty() | (removed.read().count() > 0);
-    if !changed {
+    // Ob sich die Gebäude geändert haben, aus dem Bestand selbst ablesen (Anzahl und Summe der
+    // Entity-Bits). Änderungsmeldungen von Bevy gehen verloren, wenn in einem Bild kein Tick läuft.
+    let sig = q.iter().fold((0usize, 0u64), |(n, s), (e, ..)| (n + 1, s.wrapping_add(e.to_bits().wrapping_mul(0x9E37_79B9_7F4A_7C15))));
+    if *last == Some(sig) {
         return;
     }
-    let obstacles: Vec<Obstacle> = q
-        .iter()
-        .map(|(e, t, b, team, wall, gate)| Obstacle {
+    *last = Some(sig);
+    let mut rows: Vec<_> = q.iter().collect();
+    // feste Reihenfolge (überlappende Mauern: das spätere Stück gewinnt die Zelle)
+    rows.sort_by_key(|r| r.6.map_or(u64::MAX / 2 + r.0.to_bits() / 2, |i| i.0 as u64));
+    let obstacles: Vec<Obstacle> = rows
+        .into_iter()
+        .map(|(e, t, b, team, wall, gate, _)| Obstacle {
             pos: t.translation,
             radius: b.radius,
             team: *team,

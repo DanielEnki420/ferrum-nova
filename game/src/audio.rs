@@ -240,20 +240,20 @@ pub fn game_sounds(
     mut state: Local<(bool, usize, Option<Outcome>)>,
 ) {
     let (started, pings, last_outcome) = &mut *state;
-    if placed.iter().any(|t| *t == PLAYER) {
+    if placed.iter().any(|t| *t == crate::net::me()) {
         out.write(PlaySfx::ui(Sfx::BuildPlace));
     }
-    if finished.read().any(|e| buildings.get(e).is_ok_and(|t| *t == PLAYER)) {
+    if finished.read().any(|e| buildings.get(e).is_ok_and(|t| *t == crate::net::me())) {
         out.write(PlaySfx::ui(Sfx::BuildDone));
     }
     // Die Startarmee meldet sich nicht
-    if *started && new_units.iter().any(|t| *t == PLAYER) {
+    if *started && new_units.iter().any(|t| *t == crate::net::me()) {
         out.write(PlaySfx::ui(Sfx::UnitReady));
     }
     *started = true;
     if !markers.is_empty() {
         out.write(PlaySfx::ui(Sfx::Ack));
-    } else if selected.iter().any(|t| *t == PLAYER) {
+    } else if selected.iter().any(|t| *t == crate::net::me()) {
         out.write(PlaySfx::ui(Sfx::Select));
     }
     if alerts.pings.len() > *pings {

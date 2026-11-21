@@ -110,11 +110,47 @@ cd web && npx astro preview
   - **Kamera:** WASD, Pfeiltasten, Bildschirmrand oder mittlere Maustaste ziehen. Q/E drehen, das Mausrad zoomt zum Mauszeiger hin. Auf dem Trackpad verschiebt Wischen mit zwei Fingern die Kamera, Fingerspreizen zoomt. Leertaste springt zum letzten Angriff auf eigene Einheiten (bis 15 Sekunden danach, sonst zur Basis), Pos1 zur Basis.
   - **Minikarte** (unten rechts): Gelände, Felder, Gebäude, Einheiten, Sichtbereich der Kamera und rot blinkende Angriffsmeldungen. Linksklick oder Ziehen bewegt die Kamera, Rechtsklick schickt die Auswahl hin (mit Strg/Alt/Shift wie oben).
 
+## Duell (Mehrspieler 1 gegen 1)
+
+**Bedienung:** Im Menü auf „Duell erstellen“ klicken. Das Spiel zeigt einen Einladungslink (`/play/?duell=<raum>&k=<schlüssel>`), „Link kopieren“ legt ihn in die Zwischenablage. Wer den Link öffnet, tritt bei. Sobald beide da sind, startet die Partie in beiden Browsern gleichzeitig. Der Gastgeber spielt Blau (Team 0), der Gast Rot (Team 1). Kamera, Steuerung und Nebel gelten jeweils für das eigene Team. Im Duell gibt es weder KI (`ai.rs`) noch VAAR (`vaar.rs`) und keine Kampagne. Pause gibt es nicht: Esc öffnet nur das Menü, das Spiel läuft weiter. Dort lässt sich auch aufgeben. Verlässt der Gegner die Partie, gewinnt man.
+
+**Architektur (deterministischer Lockstep):**
+- Beide Browser rechnen dieselbe Simulation. Übertragen werden nur Befehle (`game/src/net/cmd.rs`: Bewegen, Angreifen, Abbauen, Halten, Stopp, Sammelpunkt, Produzieren, Bauen, Aufgeben), kompakt binär kodiert.
+- Die Simulation läuft in einem eigenen Schedule `SimTick` mit 20 Ticks/s, single-threaded und festem dt (`game/src/sim.rs`). Auch der Einzelspieler nutzt diesen Takt. Für ruckelfreie Bewegung interpoliert die Darstellung zwischen zwei Ticks (`SimXf`).
+- Befehle gelten 4 Ticks (200 ms) nach der Eingabe. Ein Tick läuft erst, wenn die Befehle beider Seiten für ihn da sind, sonst erscheint „Warte auf Mitspieler …“ (`game/src/net/mod.rs`, `Lockstep`).
+- Entities werden über eine stabile `NetId` angesprochen, nie über die Bevy-`Entity`. Reihenfolgeabhängige Systeme (Bewegung, Ernte, Geschosse, Navigationsraster, Snapshot) laufen nach NetId sortiert. Lokale Marker (`Selected`, `Fogged`, `Lit`) liegen im SparseSet und verändern die Tabellen der Sim-Entities nicht. Die Sicht beider Teams (`SimSight`) und die Halkyon-Uhr gehören zur Simulation, Nebel, Licht und Zeitsprung-Optik (`era.rs`) bleiben lokal.
+- Alle 20 Ticks tauschen beide eine FNV-Prüfsumme über den Spielzustand. Bei Abweichung meldet die Browser-Konsole „Desync“. Im Hello wird außerdem eine Build-ID verglichen (`game/build.rs`), damit nur gleiche Versionen gegeneinander spielen.
+- Relay: Ein Cloudflare Durable Object `DuellRaum` pro Raum (`web/worker-duell/`) verbindet zwei WebSockets und reicht die Spielnachrichten unverändert weiter. Wer zuerst kommt, legt den Raumschlüssel fest. Ein dritter Spieler oder ein falscher Schlüssel wird abgewiesen. Auf der Website leitet die Pages Function `web/functions/ws/[raum].js` die Adresse `/ws/<raum>` an das Durable Object weiter.
+
+**Tests:** `cd game && cargo test` prüft unter anderem den Roundtrip der Befehlskodierung, zwei Simulationen über 3000 Ticks im Lockstep (eine davon mit „Optik-Rauschen“ wie zusätzlichen Entities und umgeschalteten Markern, die Prüfsummen müssen übereinstimmen), das Warten auf beide Seiten und den Handshake über eine Verbindung im Speicher.
+
+**Lokal testen** (zwei Terminals):
+
+```bash
+cd web/worker-duell && npx wrangler dev --port 8787 --ip 127.0.0.1
+```
+
+```bash
+cd game && trunk serve --port 8080
+```
+
+Unter `localhost:8080` verbindet sich das Spiel direkt mit dem Relay auf Port 8787 (`relay_url` in `game/src/net/mod.rs`), auf der Website mit `/ws/` derselben Adresse. Dann http://localhost:8080 öffnen, „Duell erstellen“ klicken und den Link in einem zweiten Fenster öffnen. Beide Fenster sollten im Vordergrund sichtbar bleiben, weil Browser Hintergrund-Tabs stark bremsen.
+
+**Veröffentlichen** (einmalig, vor dem nächsten Pages-Deploy): Zuerst den Worker mit dem Durable Object deployen.
+
+```bash
+cd web/worker-duell && npx wrangler deploy
+```
+
+Danach kennt das Pages-Projekt die Klasse über die Bindung in `web/wrangler.toml` (`script_name = "ferrum-nova-duell"`). Läuft der Passwortschutz über `functions/_middleware.js`, gilt er auch für `/ws/`. Ob Browser die Basic-Auth-Daten beim WebSocket-Upgrade mitschicken, ist nicht für jeden Browser sicher. Falls die Verbindung mit 401 scheitert, kann die Middleware `/ws/` ausnehmen. Dort schützt dann der Raumschlüssel im Link.
+
+**Einschränkungen (v1):** Kein Wiederverbinden nach einem Abbruch. Ein Hintergrund-Tab hält die eigene Simulation an, dann wartet auch der Mitspieler. Duelle gibt es nur im Browser, nicht in der Desktop-Version.
+
 ## Mögliche nächste Schritte
 
 - Baukasten aus Chassis und Waffe, Forschungsbaum
 - Pionierfahrzeug, das Gebäude errichtet, und weitere Gebäudetypen (Forschung, Radar)
 - Diplomatie mit mehreren KI-Fraktionen
-- Mehrspieler über einen Rust-Server (WebSockets)
+- Duell: Wiederverbinden, Zuschauer, mehr als zwei Spieler
 - Texturen als KTX2 (GPU-komprimiert) statt JPG, sobald KTX-Software verfügbar ist
 - Eigene Schriftart mit Umlauten für das HUD (die eingebaute Bevy-Schrift kann keine Umlaute)

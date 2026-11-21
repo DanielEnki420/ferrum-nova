@@ -19,8 +19,6 @@ pub const FOG_TEXTURE: Handle<Image> = uuid_handle!("6f1d2c3a-8b4e-4f7a-9c2d-1e5
 /// Zellen je Kante (1 m je Zelle über das ganze Spielfeld)
 pub const N: usize = (2.0 * MAP_HALF) as usize;
 const EXPLORED: f32 = 0.5;
-/// Neuberechnung der Sicht (s); dazwischen wird nur weich überblendet
-const INTERVAL: f32 = 0.15;
 
 #[derive(Resource)]
 pub struct FogGrid {
@@ -28,17 +26,16 @@ pub struct FogGrid {
     visible: Vec<bool>,
     /// angezeigte Helligkeit je Zelle, gleitet zum Ziel
     shown: Vec<f32>,
-    timer: f32,
     fresh: bool,
 }
 
 impl Default for FogGrid {
     fn default() -> Self {
-        Self { explored: vec![false; N * N], visible: vec![false; N * N], shown: vec![0.0; N * N], timer: 0.0, fresh: true }
+        Self { explored: vec![false; N * N], visible: vec![false; N * N], shown: vec![0.0; N * N], fresh: true }
     }
 }
 
-fn cell(p: Vec3) -> Option<usize> {
+pub fn cell(p: Vec3) -> Option<usize> {
     let x = (p.x + MAP_HALF).floor();
     let z = (p.z + MAP_HALF).floor();
     if x < 0.0 || z < 0.0 || x >= N as f32 || z >= N as f32 {
@@ -63,25 +60,33 @@ impl FogGrid {
     }
 
     /// Kreis aufdecken
+    #[cfg(test)]
     pub fn reveal(&mut self, p: Vec3, r: f32) {
-        let (cx, cz) = (p.x + MAP_HALF, p.z + MAP_HALF);
-        if cx + r < 0.0 || cz + r < 0.0 {
-            return;
-        }
-        let x0 = (cx - r).floor().max(0.0) as usize;
-        let x1 = ((cx + r).ceil() as usize).min(N - 1);
-        let z0 = (cz - r).floor().max(0.0) as usize;
-        let z1 = ((cz + r).ceil() as usize).min(N - 1);
-        let r2 = r * r;
-        for z in z0..=z1 {
-            let dz = z as f32 + 0.5 - cz;
-            for x in x0..=x1 {
-                let dx = x as f32 + 0.5 - cx;
-                if dx * dx + dz * dz <= r2 {
-                    let i = z * N + x;
-                    self.visible[i] = true;
-                    self.explored[i] = true;
-                }
+        let (visible, explored) = (&mut self.visible, &mut self.explored);
+        circle(p, r, |i| {
+            visible[i] = true;
+            explored[i] = true;
+        });
+    }
+}
+
+/// Alle Zellen in einem Kreis
+pub fn circle(p: Vec3, r: f32, mut f: impl FnMut(usize)) {
+    let (cx, cz) = (p.x + MAP_HALF, p.z + MAP_HALF);
+    if cx + r < 0.0 || cz + r < 0.0 {
+        return;
+    }
+    let x0 = (cx - r).floor().max(0.0) as usize;
+    let x1 = ((cx + r).ceil() as usize).min(N - 1);
+    let z0 = (cz - r).floor().max(0.0) as usize;
+    let z1 = ((cz + r).ceil() as usize).min(N - 1);
+    let r2 = r * r;
+    for z in z0..=z1 {
+        let dz = z as f32 + 0.5 - cz;
+        for x in x0..=x1 {
+            let dx = x as f32 + 0.5 - cx;
+            if dx * dx + dz * dz <= r2 {
+                f(z * N + x);
             }
         }
     }
@@ -100,7 +105,7 @@ pub fn unit_sight(kind: UnitKind) -> f32 {
 }
 
 /// Sichtweite eines Gebäudes: Türme sehen etwas über ihre Reichweite hinaus
-fn building_sight(b: &Building, weapon: Option<&Weapon>, wall: bool, site: bool) -> f32 {
+pub fn building_sight(b: &Building, weapon: Option<&Weapon>, wall: bool, site: bool) -> f32 {
     if wall {
         return 6.0;
     }
@@ -126,28 +131,18 @@ pub fn update_fog(
     time: Res<Time>,
     mut fog: ResMut<FogGrid>,
     mut images: ResMut<Assets<Image>>,
-    units: Query<(&Transform, &Team, &Unit)>,
-    buildings: Query<(&Transform, &Team, &Building, Option<&Weapon>, Has<Wall>, Has<Construction>)>,
-    eclipse: Option<Res<crate::halkyon::Eclipse>>,
+    sight: Option<Res<crate::sim::SimSight>>,
 ) {
-    // In der Halkyon-Finsternis sieht der Spieler weniger weit
-    let dark = eclipse.map_or(0.0, |e| e.shade);
-    let unit_k = 1.0 - crate::halkyon::UNIT_SIGHT_LOSS * dark;
-    let building_k = 1.0 - crate::halkyon::BUILDING_SIGHT_LOSS * dark;
+    // Die Sicht rechnet die Simulation (sim.rs, gleich auf beiden Rechnern); hier nur die eigene
+    // Mannschaft übernehmen und weich überblenden
     let dt = time.delta_secs();
-    fog.timer -= dt;
-    if fog.timer <= 0.0 || fog.fresh {
-        fog.timer = INTERVAL;
-        fog.visible.iter_mut().for_each(|v| *v = false);
-        for (t, team, u) in &units {
-            if *team == PLAYER {
-                fog.reveal(t.translation, unit_sight(u.kind) * unit_k);
-            }
-        }
-        for (t, team, b, w, wall, site) in &buildings {
-            if *team == PLAYER {
-                fog.reveal(t.translation, building_sight(b, w, wall, site) * building_k);
-            }
+    let Some(sight) = sight.filter(|s| s.ready) else { return };
+    if sight.is_changed() || fog.fresh {
+        let me = crate::net::me().0 as usize & 1;
+        let FogGrid { explored, visible, .. } = &mut *fog;
+        visible.copy_from_slice(&sight.visible[me]);
+        for (e, v) in explored.iter_mut().zip(visible.iter()) {
+            *e |= *v;
         }
     }
     // Aufdecken schnell, Zuziehen langsamer
@@ -193,11 +188,11 @@ pub fn hide_enemies(
     mut q: Query<(Entity, &Transform, &Team, &mut Visibility, Has<Building>, Has<Fogged>), (Or<(With<Unit>, With<Building>)>, Without<Projectile>)>,
     mut shots: Query<(&Transform, &Projectile, &mut Visibility), (Without<Unit>, Without<Building>)>,
 ) {
+    let me = crate::net::me();
     for (e, t, team, mut vis, building, fogged) in &mut q {
-        if *team == PLAYER {
-            continue;
-        }
-        let seen = if building { fog.explored(t.translation) } else { fog.visible(t.translation) };
+        // Eigenes immer zeigen (im Duell steht das eigene Team erst nach der Anmeldung fest,
+        // vorher kann es als Gegner versteckt worden sein)
+        let seen = *team == me || if building { fog.explored(t.translation) } else { fog.visible(t.translation) };
         let want = if seen { Visibility::Inherited } else { Visibility::Hidden };
         if *vis != want {
             *vis = want;
@@ -209,10 +204,7 @@ pub fn hide_enemies(
         }
     }
     for (t, p, mut vis) in &mut shots {
-        if p.team == PLAYER {
-            continue;
-        }
-        let want = if fog.visible(t.translation) { Visibility::Inherited } else { Visibility::Hidden };
+        let want = if p.team == me || fog.visible(t.translation) { Visibility::Inherited } else { Visibility::Hidden };
         if *vis != want {
             *vis = want;
         }

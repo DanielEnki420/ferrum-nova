@@ -1,0 +1,10 @@
+# Cloudflare Pages: Website samt Spiel (npm run build → dist/) und Pages Functions (functions/).
+# Die Duell-Räume liegen im Worker web/worker-duell (vorher einmal deployen).
+name = "ferrum-nova"
+pages_build_output_dir = "dist"
+compatibility_date = "2025-09-01"
+
+[[durable_objects.bindings]]
+name = "DUELL"
+class_name = "DuellRaum"
+script_name = "ferrum-nova-duell"

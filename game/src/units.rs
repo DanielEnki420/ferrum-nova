@@ -22,9 +22,40 @@ pub struct Snap {
     pub gate: bool,
 }
 
-/// Positionen aller kampffähigen Objekte dieses Frames
+/// Positionen aller kampffähigen Objekte dieses Ticks, nach `NetId` sortiert.
+/// Die feste Reihenfolge ist für das Duell wichtig: Summen und Gleichstände kommen so auf beiden
+/// Rechnern gleich heraus (Entity-IDs und Tabellenreihenfolge unterscheiden sich dort).
 #[derive(Resource, Default)]
-pub struct Snapshot(pub HashMap<Entity, Snap>);
+pub struct Snapshot {
+    list: Vec<(Entity, Snap)>,
+    index: HashMap<Entity, usize>,
+}
+
+impl Snapshot {
+    pub fn get(&self, e: &Entity) -> Option<&Snap> {
+        self.index.get(e).map(|i| &self.list[*i].1)
+    }
+    pub fn iter(&self) -> impl Iterator<Item = (&Entity, &Snap)> {
+        self.list.iter().map(|(e, s)| (e, s))
+    }
+    pub fn len(&self) -> usize {
+        self.list.len()
+    }
+    #[allow(dead_code)]
+    pub fn is_empty(&self) -> bool {
+        self.list.is_empty()
+    }
+    /// Neu aufbauen; `items` mit Sortierschlüssel
+    pub fn rebuild(&mut self, mut items: Vec<(u32, Entity, Snap)>) {
+        items.sort_by_key(|(k, _, _)| *k);
+        self.list.clear();
+        self.index.clear();
+        for (i, (_, e, s)) in items.into_iter().enumerate() {
+            self.index.insert(e, i);
+            self.list.push((e, s));
+        }
+    }
+}
 
 fn dist2d(a: Vec3, b: Vec3) -> f32 {
     flat(a).distance(flat(b))
@@ -37,11 +68,14 @@ fn angle_diff(a: f32, b: f32) -> f32 {
 
 pub fn snapshot(
     mut snap: ResMut<Snapshot>,
-    q: Query<(Entity, &Transform, &Team, Option<&Unit>, Option<&Building>, Has<Wall>, Has<Gate>), With<Health>>,
+    q: Query<(Entity, &Transform, &Team, Option<&Unit>, Option<&Building>, Has<Wall>, Has<Gate>, Option<&NetId>), With<Health>>,
 ) {
-    snap.0.clear();
-    for (e, t, team, u, b, wall, gate) in &q {
-        snap.0.insert(
+    let mut items = Vec::with_capacity(snap.len() + 8);
+    for (e, t, team, u, b, wall, gate, id) in &q {
+        // ohne NetId (nur in Tests): ans Ende, in Entity-Reihenfolge
+        let key = id.map_or(u32::MAX - 1_000_000 + e.index_u32().min(999_999), |i| i.0);
+        items.push((
+            key,
             e,
             Snap {
                 pos: t.translation,
@@ -51,8 +85,9 @@ pub fn snapshot(
                 wall,
                 gate,
             },
-        );
+        ));
     }
+    snap.rebuild(items);
 }
 
 /// Bewaffnete Einheiten suchen sich selbst Ziele, wenn sie nicht gerade einen Marschbefehl haben
@@ -60,22 +95,23 @@ pub fn auto_target(
     mut commands: Commands,
     snap: Res<Snapshot>,
     q: Query<(Entity, &Weapon, &Team, Has<MoveTo>, Has<AttackMove>, Has<HoldPosition>), (Without<AttackTarget>, Without<Construction>)>,
-    fog: Option<Res<crate::fog::FogGrid>>,
+    (seen, rules): (Option<Res<crate::sim::SimSight>>, Option<Res<crate::sim::SimRules>>),
 ) {
     for (e, w, team, moving, amove, hold) in &q {
+        let fogged = crate::sim::fogged_team(rules.as_deref(), *team);
         if moving && !amove {
             continue;
         }
-        let Some(me) = snap.0.get(&e) else { continue };
+        let Some(me) = snap.get(&e) else { continue };
         // wer die Stellung hält, sucht nur Ziele in Schussweite
         let sight = if hold { w.range } else { w.range + 6.0 };
         let mut best: Option<(Entity, f32)> = None;
-        for (oe, o) in &snap.0 {
+        for (oe, o) in snap.iter() {
             if o.team == *team || o.wall {
                 continue;
             }
-            // Der Spieler schießt nur auf das, was er sieht (Artillerie braucht Aufklärung)
-            if *team == PLAYER && fog.as_ref().is_some_and(|f| !f.visible(o.pos)) {
+            // Menschen schießen nur auf das, was sie sehen (Artillerie braucht Aufklärung)
+            if fogged && seen.as_ref().is_some_and(|s| !s.sees(*team, o.pos)) {
                 continue;
             }
             // Einheiten vor Gebäuden bevorzugen
@@ -106,7 +142,7 @@ pub fn combat(
     let dt = time.delta_secs();
     for (e, mut w, target, team, t, unit, motion, structure) in &mut q {
         w.timer = (w.timer - dt).max(0.0);
-        let Some(tgt) = snap.0.get(&target.0) else {
+        let Some(tgt) = snap.get(&target.0) else {
             commands.entity(e).remove::<AttackTarget>();
             continue;
         };
@@ -191,14 +227,17 @@ pub fn movement(
         Has<HoldPosition>,
         Option<&mut Path>,
     )>,
+    ids: Query<(Entity, Option<&NetId>), With<Unit>>,
 ) {
     let dt = time.delta_secs();
-    for (e, unit, mut t, mut heading, mv, atk, w, group, hold, mut path) in &mut q {
+    // feste Reihenfolge: die Wegsuche hat ein Budget je Tick, wer zuerst fragt, kommt zuerst dran
+    for e in crate::sim::in_order(ids.iter()) {
+        let Ok((e, unit, mut t, mut heading, mv, atk, w, group, hold, mut path)) = q.get_mut(e) else { continue };
         let me = flat(t.translation);
         let mut goal: Option<(Vec3, f32)> = None;
         let mut engaged = false;
         if let (Some(a), Some(w)) = (atk, w)
-            && let Some(tgt) = snap.0.get(&a.0) {
+            && let Some(tgt) = snap.get(&a.0) {
                 engaged = true;
                 let out_of_range = dist2d(me, tgt.pos) - tgt.radius > w.range * 0.95;
                 if out_of_range && hold {
@@ -277,11 +316,10 @@ pub fn movement(
 
 /// Einheiten schieben sich auseinander und bleiben außerhalb von Gebäuden
 pub fn separation(snap: Res<Snapshot>, grid: Option<Res<NavGrid>>, mut q: Query<(Entity, &Unit, &Team, &mut Transform)>) {
-    let list: Vec<(Entity, Snap)> = snap.0.iter().map(|(e, s)| (*e, *s)).collect();
     for (e, unit, team, mut t) in &mut q {
         let me = flat(t.translation);
         let mut push = Vec3::ZERO;
-        for (oe, o) in &list {
+        for (oe, o) in snap.iter() {
             // eigene Tore sind offen
             if *oe == e || (o.gate && o.team == *team) {
                 continue;
@@ -344,7 +382,7 @@ pub fn turret_aim(
     for (t, heading, tref, atk, motion) in &units {
         let Ok((mut tt, turret)) = turrets.get_mut(tref.0) else { continue };
         let mut local = 0.0;
-        if let Some(tgt) = atk.and_then(|a| snap.0.get(&a.0)) {
+        if let Some(tgt) = atk.and_then(|a| snap.get(&a.0)) {
             let to = flat(tgt.pos - t.translation);
             if to.length_squared() > 0.01 {
                 local = angle_diff(heading.0, Heading::from_dir(to).0);
@@ -366,12 +404,15 @@ pub fn harvest(
     mut harvesters: Query<(Entity, &mut Harvester, &Transform, &Team, Has<MoveTo>), Without<ResourceNode>>,
     mut nodes: Query<(Entity, &Transform, &mut ResourceNode)>,
     depots: Query<(&Transform, &Team, &Building), (With<Depot>, Without<Construction>)>,
-    (cfg, mut stats): (Option<Res<crate::frame::MatchConfig>>, Option<ResMut<crate::frame::Stats>>),
+    (cfg, mut stats, rules): (Option<Res<crate::frame::MatchConfig>>, Option<ResMut<crate::frame::Stats>>, Option<Res<crate::sim::SimRules>>),
+    ids: Query<(Entity, Option<&NetId>), With<Harvester>>,
 ) {
     let dt = time.delta_secs();
     // Schwierigkeit: die Gegner-KI bekommt mehr oder weniger je Ladung
-    let ai_income = cfg.map_or(1.0, |c| c.ai_income());
-    for (e, mut h, t, team, moving) in &mut harvesters {
+    let ai_income = if rules.is_some_and(|r| r.duel) { 1.0 } else { cfg.map_or(1.0, |c| c.ai_income()) };
+    // feste Reihenfolge: wer zuerst abbaut, bekommt den Rest eines fast leeren Feldes
+    for e in crate::sim::in_order(ids.iter()) {
+        let Ok((e, mut h, t, team, moving)) = harvesters.get_mut(e) else { continue };
         let me = flat(t.translation);
         // Nächste eigene Abladestelle (HQ oder Raffinerie)
         let depot = depots
@@ -479,10 +520,13 @@ pub fn projectiles(
     mut q: Query<(Entity, &mut Transform, &mut Projectile)>,
     mut health: Query<&mut Health>,
     mut alerts: Option<ResMut<Alerts>>,
+    ids: Query<(Entity, Option<&NetId>), With<Projectile>>,
 ) {
     let dt = time.delta_secs();
-    for (e, mut t, mut p) in &mut q {
-        let Some(tgt) = snap.0.get(&p.target) else {
+    // feste Reihenfolge: mehrere Treffer auf dasselbe Ziel ergeben so dieselben Lebenspunkte
+    for e in crate::sim::in_order(ids.iter()) {
+        let Ok((e, mut t, mut p)) = q.get_mut(e) else { continue };
+        let Some(tgt) = snap.get(&p.target) else {
             commands.entity(e).try_despawn();
             continue;
         };
@@ -491,14 +535,14 @@ pub fn projectiles(
         let d = to.length();
         let step = p.speed * dt;
         if d <= step + tgt.radius * 0.4 {
-            if tgt.team == PLAYER
+            if tgt.team == crate::net::me()
                 && let Some(a) = alerts.as_mut()
             {
                 a.hit(tgt.pos);
             }
             if p.splash > 0.0 {
                 // Flächenschaden: alle Gegner im Umkreis, nach außen schwächer
-                for (oe, o) in &snap.0 {
+                for (oe, o) in snap.iter() {
                     if o.team == p.team {
                         continue;
                     }

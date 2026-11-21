@@ -727,7 +727,6 @@ pub fn ai_tactics(
         // Haubitze: Abstand zu bewaffneten Gegnern halten
         if unit.kind == UnitKind::Haubitze {
             let close = snap
-                .0
                 .iter()
                 .filter(|(oe, o)| o.team != ENEMY && !o.is_building && info.get(**oe).is_ok_and(|i| i.3))
                 .map(|(_, o)| flat(o.pos))
@@ -742,7 +741,7 @@ pub fn ai_tactics(
         // Zielwahl: Abstand, Zustand des Ziels und was die eigene Waffe am besten kann
         let mut best: Option<(Entity, f32)> = None;
         let mut current: Option<f32> = None;
-        for (oe, o) in &snap.0 {
+        for (oe, o) in snap.iter() {
             if o.team == ENEMY {
                 continue;
             }

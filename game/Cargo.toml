@@ -46,10 +46,14 @@ bevy = { version = "0.20.1", default-features = false, features = [
     "vorbis",
 ] }
 
-# Im Browser: Adresse lesen und die Seite für einen Neustart neu laden
+# Im Browser: Adresse lesen, Seite neu laden, Duell über WebSocket, Link in die Zwischenablage
 [target.'cfg(target_arch = "wasm32")'.dependencies]
-web-sys = { version = "0.3.107", features = ["Window", "Location", "History", "Document", "Element", "Storage"] }
+web-sys = { version = "0.3.107", features = [
+    "Window", "Location", "History", "Document", "Element", "Storage",
+    "WebSocket", "MessageEvent", "BinaryType", "Event", "Navigator", "Clipboard", "Crypto",
+] }
 wasm-bindgen = "0.2.130"
+js-sys = "0.3.107"
 
 # Schnellere Debug-Builds: eigener Code leicht optimiert, Abhängigkeiten voll
 [profile.dev]

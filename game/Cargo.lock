@@ -2608,6 +2608,7 @@ name = "ferrum-nova"
 version = "0.1.0"
 dependencies = [
  "bevy",
+ "js-sys",
  "wasm-bindgen",
  "web-sys",
 ]

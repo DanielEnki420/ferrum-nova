@@ -72,6 +72,8 @@ pub struct MatchConfig {
     pub mission: u8,
     /// direkt losspielen statt das Hauptmenü zu zeigen
     pub autostart: bool,
+    /// Duell gegen einen Menschen: (Raum, Schlüssel) aus `?duell=…&k=…`
+    pub duell: Option<(String, String)>,
 }
 
 impl MatchConfig {
@@ -83,12 +85,16 @@ impl MatchConfig {
         if self.autostart {
             q += "&auto=1";
         }
+        if let Some((room, key)) = &self.duell {
+            q = format!("?duell={room}&k={key}");
+        }
         q
     }
 
     /// Liest `d=…`, `m=…`, `auto=1` aus einer Adresse oder aus Programmargumenten
     pub fn parse<'a>(parts: impl Iterator<Item = &'a str>) -> Self {
         let mut cfg = MatchConfig::default();
+        let (mut room, mut key) = (None, None);
         for p in parts {
             let p = p.trim_start_matches(['?', '-']);
             let (k, v) = p.split_once('=').unwrap_or((p, ""));
@@ -100,10 +106,34 @@ impl MatchConfig {
                 }
                 "m" => cfg.mission = v.parse().unwrap_or(0),
                 "auto" => cfg.autostart = v != "0",
+                "duell" => room = Some(v.to_string()),
+                "k" => key = Some(v.to_string()),
                 _ => {}
             }
         }
+        // nur Buchstaben und Ziffern, damit der Raum sicher in die Adresse des Relays passt
+        let clean = |v: Option<String>| v.filter(|v| !v.is_empty() && v.len() <= 32 && v.chars().all(|c| c.is_ascii_alphanumeric()));
+        if let (Some(r), Some(k)) = (clean(room), clean(key)) {
+            cfg.duell = Some((r, k));
+            cfg.mission = 0;
+            cfg.autostart = false;
+        }
         cfg
+    }
+
+    /// Einladungslink zum Duell (volle Adresse)
+    pub fn invite_link(&self) -> String {
+        let Some(_) = &self.duell else { return String::new() };
+        #[cfg(target_arch = "wasm32")]
+        {
+            let Some(win) = web_sys::window() else { return String::new() };
+            let loc = win.location();
+            format!("{}{}{}", loc.origin().unwrap_or_default(), loc.pathname().unwrap_or_default(), self.query())
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            format!("/play/{}", self.query())
+        }
     }
 
     /// Einnahmen-Faktor der Gegner-KI: Schwierigkeit mal Mission
@@ -119,8 +149,9 @@ impl MatchConfig {
             let search = win.location().search().unwrap_or_default();
             let cfg = Self::parse(search.trim_start_matches('?').split('&'));
             // Adresse wieder säubern, damit ein Neuladen von Hand (oder das Live-Neuladen
-            // beim Entwickeln) nicht wieder sofort losspielt
+            // beim Entwickeln) nicht wieder sofort losspielt. Ein Duell-Link bleibt stehen.
             if !search.is_empty()
+                && cfg.duell.is_none()
                 && let Ok(history) = win.history()
             {
                 let path = win.location().pathname().unwrap_or_default();
@@ -171,9 +202,17 @@ pub enum Phase {
     Paused,
 }
 
-pub fn playing(phase: Option<Res<Phase>>, outcome: Res<Outcome>) -> bool {
-    phase.is_none_or(|p| *p == Phase::Playing) && *outcome == Outcome::Running
+pub fn playing(phase: Option<Res<Phase>>, outcome: Res<Outcome>, net: Option<Res<crate::net::Net>>) -> bool {
+    if *outcome != Outcome::Running {
+        return false;
+    }
+    match net.as_deref().filter(|n| n.is_duel()) {
+        // Im Duell hält die Pause nichts an (der Mitspieler spielt weiter)
+        Some(n) => n.started() && phase.is_none_or(|p| matches!(*p, Phase::Playing | Phase::Paused)),
+        None => phase.is_none_or(|p| *p == Phase::Playing),
+    }
 }
+
 
 /// Zahlen für den Endbildschirm, je Team
 #[derive(Resource, Default, Debug)]
@@ -254,7 +293,29 @@ pub enum FrameButton {
     Mission(u8),
     StartMission,
     NextMission,
+    /// Neues Duell anlegen (Einladungslink)
+    CreateDuel,
+    /// Einladungslink in die Zwischenablage
+    CopyLink,
+    /// Aufgeben (Duell)
+    Surrender,
 }
+
+/// Nur im Einzelspieler sichtbar
+#[derive(Component)]
+pub struct SoloOnly;
+/// Nur im Duell sichtbar
+#[derive(Component)]
+pub struct DuelOnly;
+#[derive(Component)]
+pub struct DuelPanel;
+#[derive(Component)]
+pub struct DuelStatus;
+#[derive(Component)]
+pub struct DuelLink;
+/// Hinweis im Spiel („Warte auf Mitspieler …“)
+#[derive(Component)]
+pub struct NetHint;
 
 #[derive(Component)]
 pub struct CampaignPanel;
@@ -403,6 +464,7 @@ pub fn setup_frame(mut commands: Commands, cfg: Res<MatchConfig>) {
             (text("Echtzeitstrategie", 16.0, DIM), Node { margin: UiRect::bottom(px(22)), ..default() }),
             button(FrameButton::Start, "Gefecht starten", 280.0),
             button(FrameButton::Campaign, "Kampagne", 280.0),
+            button(FrameButton::CreateDuel, "Duell erstellen", 280.0),
             (text("Schwierigkeit", 14.0, DIM), Node { margin: UiRect::top(px(16)), ..default() }),
             (
                 Node { flex_direction: FlexDirection::Row, ..default() },
@@ -426,8 +488,10 @@ pub fn setup_frame(mut commands: Commands, cfg: Res<MatchConfig>) {
         children![
             (text("PAUSE", 44.0, ACCENT), Node { margin: UiRect::bottom(px(14)), ..default() }),
             button(FrameButton::Resume, "Weiter  [P]", 260.0),
+            (text("Das Duell laeuft weiter.", 13.0, DIM), DuelOnly),
             button(FrameButton::Help, "Steuerung", 260.0),
-            button(FrameButton::Again, "Neu beginnen", 260.0),
+            (button(FrameButton::Again, "Neu beginnen", 260.0), SoloOnly),
+            (button(FrameButton::Surrender, "Aufgeben", 260.0), DuelOnly),
             button(FrameButton::Menu, "Hauptmenue", 260.0),
             sound_row(),
             era_row(),
@@ -453,12 +517,44 @@ pub fn setup_frame(mut commands: Commands, cfg: Res<MatchConfig>) {
                 Node { flex_direction: FlexDirection::Row, ..default() },
                 children![
                     (button(FrameButton::NextMission, "Naechste Mission", 220.0), NextButton),
-                    button(FrameButton::Again, "Nochmal", 200.0),
+                    (button(FrameButton::Again, "Nochmal", 200.0), SoloOnly),
                     button(FrameButton::Menu, "Hauptmenue", 200.0),
                 ],
             ),
         ],
     )]));
+
+    // Duell: Einladung und Warten auf den Mitspieler
+    commands.spawn((overlay(DuelPanel, 52), children![(
+        card(),
+        children![
+            (text("DUELL", 44.0, ACCENT), Node { margin: UiRect::bottom(px(10)), ..default() }),
+            (text("", 16.0, TEXT), DuelStatus, TextLayout::justify(Justify::Center), Node { max_width: px(620), margin: UiRect::bottom(px(12)), ..default() }),
+            (text("Schick diesen Link deinem Mitspieler:", 13.0, DIM), DuelLink, Node::default()),
+            (
+                text(cfg.invite_link(), 14.0, Color::srgb(1.0, 0.9, 0.55)),
+                DuelLink,
+                Node { max_width: px(620), margin: UiRect::axes(px(0), px(8)), ..default() },
+                BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.35)),
+            ),
+            (
+                Node { flex_direction: FlexDirection::Row, ..default() },
+                children![
+                    (button(FrameButton::CopyLink, "Link kopieren", 220.0), DuelLink),
+                    button(FrameButton::Menu, "Abbrechen", 200.0),
+                ],
+            ),
+        ],
+    )]));
+    commands.spawn((
+        NetHint,
+        Text::new(""),
+        TextFont { font_size: FontSize::Px(18.0), ..default() },
+        TextColor(Color::srgb(1.0, 0.85, 0.4)),
+        TextLayout::justify(Justify::Center),
+        Node { position_type: PositionType::Absolute, top: px(70), width: percent(100), ..default() },
+        GlobalZIndex(40),
+    ));
 
     // Kampagne: Auswahl der Missionen (freigeschaltet ist, was nach der letzten geschafften kommt)
     let done = crate::campaign::progress();
@@ -549,7 +645,7 @@ pub fn frame_buttons(
     mut sfx: MessageWriter<PlaySfx>,
     mut campaign: ResMut<CampaignShown>,
     mut era: ResMut<crate::era::Era>,
-    mut vaar: ResMut<crate::vaar::VaarMemory>,
+    (mut vaar, mut outbox): (ResMut<crate::vaar::VaarMemory>, ResMut<crate::net::cmd::Outbox>),
 ) {
     for (c, mut t) in &mut captions {
         let (name, on) = match c.0 {
@@ -606,7 +702,7 @@ pub fn frame_buttons(
             *phase = Phase::Playing;
         }
         FrameButton::Again => relaunch(&MatchConfig { autostart: true, ..cfg.clone() }),
-        FrameButton::Menu => relaunch(&MatchConfig { autostart: false, mission: 0, ..cfg.clone() }),
+        FrameButton::Menu => relaunch(&MatchConfig { autostart: false, mission: 0, duell: None, ..cfg.clone() }),
         FrameButton::Sound => prefs.sfx = !prefs.sfx,
         FrameButton::Music => prefs.music = !prefs.music,
         FrameButton::Era => *era = era.toggled(),
@@ -618,7 +714,27 @@ pub fn frame_buttons(
             begin(&c, &mut ai, &mut phase);
         }
         FrameButton::NextMission => relaunch(&MatchConfig { mission: cfg.mission + 1, autostart: false, ..cfg.clone() }),
+        FrameButton::CreateDuel => relaunch(&MatchConfig {
+            duell: Some((crate::net::random_code(8), crate::net::random_code(10))),
+            mission: 0,
+            autostart: false,
+            ..cfg.clone()
+        }),
+        FrameButton::CopyLink => copy_to_clipboard(&cfg.invite_link()),
+        FrameButton::Surrender => {
+            outbox.push(crate::net::cmd::Cmd::Surrender);
+            *phase = Phase::Playing;
+        }
     }
+}
+
+fn copy_to_clipboard(text: &str) {
+    #[cfg(target_arch = "wasm32")]
+    if let Some(win) = web_sys::window() {
+        let _ = win.navigator().clipboard().write_text(text);
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    info!("Einladungslink: {text}");
 }
 
 /// P oder Esc: Pause (Esc nur, wenn nicht gerade ein Gebäude platziert wird)
@@ -684,9 +800,12 @@ pub fn update_frame(
     mut next: Query<&mut Node, With<NextButton>>,
     campaign: Res<CampaignShown>,
     mut shown_end: Local<bool>,
+    net: Option<Res<crate::net::Net>>,
 ) {
-    // Nach Spielende läuft die Zeit weiter, damit Explosionen und Einsturz ausklingen
-    let run = *phase == Phase::Playing;
+    let duel = net.as_ref().is_some_and(|n| n.is_duel());
+    // Nach Spielende läuft die Zeit weiter, damit Explosionen und Einsturz ausklingen.
+    // Im Duell hält die Pause die Zeit nicht an.
+    let run = *phase == Phase::Playing || (duel && *phase == Phase::Paused);
     if run && time.is_paused() {
         time.unpause();
     } else if !run && !time.is_paused() {
@@ -701,7 +820,7 @@ pub fn update_frame(
         }
     };
     for mut v in &mut panels.p0() {
-        set(&mut v, *phase == Phase::Menu);
+        set(&mut v, *phase == Phase::Menu && !duel);
     }
     for mut v in &mut panels.p1() {
         set(&mut v, *phase == Phase::Paused && !ended);
@@ -722,7 +841,9 @@ pub fn update_frame(
     if ended && !*shown_end {
         *shown_end = true;
         let mission = crate::campaign::current(&cfg);
-        let won = *outcome == Outcome::Won;
+        // Won/Lost gilt aus Sicht von Team 0; der Gast im Duell sieht es umgekehrt
+        let won = (*outcome == Outcome::Won) == (crate::net::me() == PLAYER);
+        let left = net.as_ref().is_some_and(|n| n.status == crate::net::Status::PeerLeft);
         let last = cfg.mission as usize == crate::campaign::MISSIONS.len();
         if let Ok(mut t) = title.single_mut() {
             **t = match (mission, won) {
@@ -738,6 +859,7 @@ pub fn update_frame(
             **t = match (mission, won) {
                 (Some(m), true) => m.outro.into(),
                 (Some(_), false) => "Das HQ ist gefallen. VAAR hat die Kolonie zurueckerobert.".into(),
+                (None, _) if left => "Dein Gegner hat das Duell verlassen.".into(),
                 (None, _) => String::new(),
             };
         }
@@ -752,8 +874,11 @@ pub fn update_frame(
             ("Ferrit gesammelt", [stats.gathered[0][0], stats.gathered[1][0]]),
             ("Plasma gesammelt", [stats.gathered[0][1], stats.gathered[1][1]]),
         ];
+        // eigene Spalte zuerst
+        let (mine, theirs) = if crate::net::me() == PLAYER { (0, 1) } else { (1, 0) };
         for (col, mut t) in &mut cols {
             let mut lines = vec![match col.0 {
+                0 if duel => format!("Duell | {}", clock(stats.time)),
                 0 => format!("{} | {}", cfg.difficulty.name(), clock(stats.time)),
                 1 => "Du".into(),
                 _ => "Gegner".into(),
@@ -761,13 +886,94 @@ pub fn update_frame(
             for (name, v) in rows {
                 lines.push(match col.0 {
                     0 => name.into(),
-                    1 => v[0].to_string(),
-                    _ => v[1].to_string(),
+                    1 => v[mine].to_string(),
+                    _ => v[theirs].to_string(),
                 });
             }
             **t = lines.join("\n");
         }
     }
+}
+
+/// Duell: Wartefenster, Start sobald beide da sind, Hinweise im Spiel, Ende bei Abbruch
+pub fn duel_flow(
+    cfg: Res<MatchConfig>,
+    net: Option<Res<crate::net::Net>>,
+    mut phase: ResMut<Phase>,
+    mut outcome: ResMut<Outcome>,
+    mut rig: ResMut<crate::input::CamRig>,
+    mut fog: ResMut<crate::fog::FogGrid>,
+    mut panel: Query<&mut Visibility, With<DuelPanel>>,
+    mut status: Query<&mut Text, (With<DuelStatus>, Without<NetHint>)>,
+    mut hint: Query<&mut Text, (With<NetHint>, Without<DuelStatus>)>,
+    mut solo_only: Query<&mut Node, (With<SoloOnly>, Without<DuelOnly>)>,
+    mut duel_only: Query<&mut Node, (With<DuelOnly>, Without<SoloOnly>)>,
+    mut links: Query<&mut Node, (With<DuelLink>, Without<SoloOnly>, Without<DuelOnly>)>,
+    mut done: Local<bool>,
+) {
+    use crate::net::Status;
+    let duel = net.as_ref().is_some_and(|n| n.is_duel());
+    if !*done {
+        *done = true;
+        for mut n in &mut solo_only {
+            n.display = if duel { Display::None } else { Display::Flex };
+        }
+        for mut n in &mut duel_only {
+            n.display = if duel { Display::Flex } else { Display::None };
+        }
+    }
+    let Some(net) = net.filter(|n| n.is_duel()) else {
+        for mut v in &mut panel {
+            *v = Visibility::Hidden;
+        }
+        return;
+    };
+    // Start, sobald beide verbunden sind
+    if *phase == Phase::Menu && net.started() {
+        *phase = Phase::Playing;
+        rig.focus = crate::input::base_focus();
+        // Erst jetzt steht das eigene Team fest: Nebel aus der eigenen Sicht neu aufbauen
+        *fog = default();
+    }
+    if net.status == Status::PeerLeft && *outcome == Outcome::Running && *phase != Phase::Menu {
+        // Wer bleibt, gewinnt
+        *outcome = if crate::net::me() == PLAYER { Outcome::Won } else { Outcome::Lost };
+    }
+    let (show, msg, link) = match net.status {
+        Status::Connecting => (true, "Verbinde mit dem Duell-Server …".to_string(), true),
+        Status::WaitingForPeer => (true, "Warte auf deinen Mitspieler. Sobald er den Link oeffnet, beginnt das Duell.".into(), true),
+        Status::Failed(why) => (true, why.to_string(), false),
+        Status::PeerLeft if *phase == Phase::Menu => (true, "Dein Mitspieler ist gegangen.".into(), false),
+        _ => (false, String::new(), false),
+    };
+    for mut v in &mut panel {
+        let want = if show { Visibility::Inherited } else { Visibility::Hidden };
+        if *v != want {
+            *v = want;
+        }
+    }
+    if let Ok(mut t) = status.single_mut()
+        && **t != msg
+    {
+        **t = msg;
+    }
+    for mut n in &mut links {
+        let d = if link { Display::Flex } else { Display::None };
+        if n.display != d {
+            n.display = d;
+        }
+    }
+    let h = if net.status == Status::Stalled && net.stalled_for > 0.6 {
+        "Warte auf deinen Mitspieler …".to_string()
+    } else {
+        String::new()
+    };
+    if let Ok(mut t) = hint.single_mut()
+        && **t != h
+    {
+        **t = h;
+    }
+    let _ = cfg;
 }
 
 /// Ladehinweis der Webseite entfernen, sobald das erste Bild steht
@@ -790,7 +996,7 @@ mod tests {
 
     #[test]
     fn config_roundtrips_through_the_address() {
-        let cfg = MatchConfig { difficulty: Difficulty::Schwer, mission: 2, autostart: true };
+        let cfg = MatchConfig { difficulty: Difficulty::Schwer, mission: 2, autostart: true, duell: None };
         let q = cfg.query();
         assert_eq!(q, "?d=schwer&m=2&auto=1");
         let back = MatchConfig::parse(q.trim_start_matches('?').split('&'));

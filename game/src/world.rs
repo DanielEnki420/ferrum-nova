@@ -200,6 +200,13 @@ pub fn setup_world(
         }
     }
 
+    spawn_start_forces(&mut commands, &kit);
+
+    commands.insert_resource(kit);
+}
+
+/// Hauptquartiere und Startarmeen beider Seiten
+pub fn spawn_start_forces(commands: &mut Commands, kit: &ModelKit) {
     // Hauptquartiere
     for (team, pos) in [(PLAYER, PLAYER_HQ_POS), (ENEMY, ENEMY_HQ_POS)] {
         let facing = if team == PLAYER { Vec3::new(1.0, 0.0, -1.0) } else { Vec3::new(-1.0, 0.0, 1.0) };
@@ -214,22 +221,20 @@ pub fn setup_world(
                 Depot,
             ))
             .id();
-        models::build_hq(&mut commands, &kit, hq, team);
+        models::build_hq(commands, kit, hq, team);
     }
 
     // Startarmeen
     for i in 0..2 {
         let o = i as f32 * 2.8;
-        spawn_unit(&mut commands, &kit, PLAYER, UnitKind::Sammler, PLAYER_HQ_POS + Vec3::new(7.0 + o, 0.0, -7.0));
-        spawn_unit(&mut commands, &kit, ENEMY, UnitKind::Sammler, ENEMY_HQ_POS + Vec3::new(-7.0 - o, 0.0, 7.0));
+        spawn_unit(commands, kit, PLAYER, UnitKind::Sammler, PLAYER_HQ_POS + Vec3::new(7.0 + o, 0.0, -7.0));
+        spawn_unit(commands, kit, ENEMY, UnitKind::Sammler, ENEMY_HQ_POS + Vec3::new(-7.0 - o, 0.0, 7.0));
     }
     for i in 0..3 {
         let o = i as f32 * 2.8;
-        spawn_unit(&mut commands, &kit, PLAYER, UnitKind::Panzer, PLAYER_HQ_POS + Vec3::new(9.0 + o, 0.0, -1.0));
-        spawn_unit(&mut commands, &kit, ENEMY, UnitKind::Panzer, ENEMY_HQ_POS + Vec3::new(-9.0 - o, 0.0, 1.0));
+        spawn_unit(commands, kit, PLAYER, UnitKind::Panzer, PLAYER_HQ_POS + Vec3::new(9.0 + o, 0.0, -1.0));
+        spawn_unit(commands, kit, ENEMY, UnitKind::Panzer, ENEMY_HQ_POS + Vec3::new(-9.0 - o, 0.0, 1.0));
     }
-
-    commands.insert_resource(kit);
 }
 
 pub fn spawn_unit(commands: &mut Commands, kit: &ModelKit, team: Team, kind: UnitKind, pos: Vec3) -> Entity {
