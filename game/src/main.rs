@@ -11,6 +11,7 @@ mod fx;
 mod hud;
 mod input;
 mod models;
+mod resources;
 mod splat;
 mod terrain;
 mod units;
@@ -89,7 +90,8 @@ fn main() {
                 fx::update_fx,
                 models::pulse_lights,
                 buildings::spin,
-                models::shrink_nodes,
+                resources::shrink_nodes,
+                resources::rise,
                 input::update_shadows,
             )
                 .chain(),

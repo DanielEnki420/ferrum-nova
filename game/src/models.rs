@@ -4,22 +4,22 @@
 use crate::components::*;
 use crate::buildings::{self, HqMeshes, Spin};
 use crate::vehicles::{self, VehicleMeshes};
-use bevy::light::NotShadowCaster;
 use bevy::prelude::*;
 
 #[derive(Resource)]
 pub struct ModelKit {
-    pub cyl: Handle<Mesh>,
     pub tracer: Handle<Mesh>,
-    pub crystal: Handle<Mesh>,
-    pub ring: Handle<Mesh>,
+    pub disc: Handle<Mesh>,
+    pub bubble: Handle<Mesh>,
     pub glow: [Handle<StandardMaterial>; 2],
     pub tracer_mat: [Handle<StandardMaterial>; 2],
     pub rocket_mat: [Handle<StandardMaterial>; 2],
     pub glass: Handle<StandardMaterial>,
     pub ferrit: Handle<StandardMaterial>,
     pub plasma: Handle<StandardMaterial>,
-    pub crater: Handle<StandardMaterial>,
+    pub ferrit_glow: Handle<StandardMaterial>,
+    pub plasma_core: Handle<StandardMaterial>,
+    pub plasma_crystal: Handle<StandardMaterial>,
     /// Detailmodelle je Typ (Sammler, Panzer, Werfer) und Team
     pub vehicles: [[VehicleMeshes; 2]; 3],
     /// Fahrzeuglack: Farbe kommt aus den Vertexfarben
@@ -38,17 +38,10 @@ impl ModelKit {
                 ..default()
             })
         };
-        // Kristall: Sechskantprisma mit Spitze
-        let mut crystal = Cylinder::new(0.28, 1.6).mesh().resolution(6).build().translated_by(Vec3::Y * 0.8);
-        crystal
-            .merge(&Cone::new(0.28, 0.55).mesh().resolution(6).build().translated_by(Vec3::Y * 1.875))
-            .expect("Kristall-Mesh");
-
         Self {
-            cyl: meshes.add(Cylinder::new(0.5, 1.0).mesh().resolution(20)),
             tracer: meshes.add(Capsule3d::new(0.05, 0.8)),
-            crystal: meshes.add(crystal),
-            ring: meshes.add(Torus::new(1.3, 2.2)),
+            disc: meshes.add(Cylinder::new(1.0, 0.02).mesh().resolution(32)),
+            bubble: meshes.add(Sphere::new(1.0).mesh().ico(2).expect("Kugel")),
             glow: [
                 glow(mats, LinearRgba::rgb(0.6, 4.0, 9.0)),
                 glow(mats, LinearRgba::rgb(9.0, 0.8, 0.3)),
@@ -67,9 +60,9 @@ impl ModelKit {
                 reflectance: 0.9,
                 ..default()
             }),
+            // Farbe aus den Vertexfarben (unten tief, an den Spitzen hell)
             ferrit: mats.add(StandardMaterial {
-                base_color: Color::srgb(0.25, 0.85, 0.7),
-                emissive: LinearRgba::rgb(0.25, 2.2, 1.5),
+                emissive: LinearRgba::rgb(0.06, 0.75, 0.5),
                 metallic: 0.1,
                 perceptual_roughness: 0.12,
                 reflectance: 0.8,
@@ -80,9 +73,13 @@ impl ModelKit {
                 emissive: LinearRgba::rgb(6.0, 1.4, 9.0),
                 ..default()
             }),
-            crater: mats.add(StandardMaterial {
-                base_color: Color::srgb(0.20, 0.18, 0.17),
-                perceptual_roughness: 0.95,
+            ferrit_glow: glow(mats, LinearRgba::rgb(0.4, 6.0, 4.0)),
+            plasma_core: glow(mats, LinearRgba::rgb(14.0, 5.0, 18.0)),
+            plasma_crystal: mats.add(StandardMaterial {
+                emissive: LinearRgba::rgb(0.9, 0.15, 1.4),
+                metallic: 0.1,
+                perceptual_roughness: 0.15,
+                reflectance: 0.8,
                 ..default()
             }),
             vehicles: [
@@ -120,9 +117,6 @@ fn part(
     e
 }
 
-fn tf(x: f32, y: f32, z: f32, sx: f32, sy: f32, sz: f32) -> Transform {
-    Transform::from_xyz(x, y, z).with_scale(Vec3::new(sx, sy, sz))
-}
 
 /// Baut das Modell an `root` und gibt den Turm (falls vorhanden) zurück
 pub fn build_unit(c: &mut Commands, k: &ModelKit, root: Entity, team: Team, kind: UnitKind) -> Option<Entity> {
@@ -178,40 +172,6 @@ pub fn build_hq(c: &mut Commands, k: &ModelKit, root: Entity, team: Team) {
     c.entity(root).add_child(light);
 }
 
-/// Ferrit-Kristallgruppe
-pub fn build_ferrit(c: &mut Commands, k: &ModelKit, root: Entity, seed: u32) {
-    let mut rng = Rng(0xA5A5_1234 ^ (seed as u64 * 7919 + 1));
-    for i in 0..9 {
-        let ang = i as f32 * 2.4 + rng.range(-0.3, 0.3);
-        let r = if i == 0 { 0.0 } else { rng.range(0.6, 2.0) };
-        let s = if i == 0 { 1.5 } else { rng.range(0.55, 1.15) };
-        let tilt = if i == 0 { 0.05 } else { rng.range(0.2, 0.6) };
-        let rot = Quat::from_rotation_y(ang) * Quat::from_rotation_x(tilt);
-        part(
-            c,
-            root,
-            &k.crystal,
-            &k.ferrit,
-            Transform::from_xyz(ang.cos() * r, -0.15, ang.sin() * r)
-                .with_rotation(rot)
-                .with_scale(Vec3::splat(s)),
-        );
-    }
-    let light = c
-        .spawn((
-            PointLight {
-                color: Color::srgb(0.4, 1.0, 0.8),
-                intensity: 250_000.0,
-                range: 9.0,
-                shadow_maps_enabled: false,
-                ..default()
-            },
-            Transform::from_xyz(0.0, 2.2, 0.0),
-        ))
-        .id();
-    c.entity(root).add_child(light);
-}
-
 /// Pulsierende Lichtquelle (Plasma)
 #[derive(Component)]
 pub struct Pulse {
@@ -219,40 +179,9 @@ pub struct Pulse {
     pub phase: f32,
 }
 
-/// Plasmaquelle: Kraterring mit leuchtendem Becken
-pub fn build_plasma(c: &mut Commands, k: &ModelKit, root: Entity, seed: u32) {
-    part(c, root, &k.ring, &k.crater, tf(0.0, 0.05, 0.0, 1.0, 1.6, 1.0));
-    let pool = part(c, root, &k.cyl, &k.plasma, tf(0.0, 0.08, 0.0, 2.8, 0.1, 2.8));
-    c.entity(pool).insert(NotShadowCaster);
-    let light = c
-        .spawn((
-            PointLight {
-                color: Color::srgb(0.8, 0.35, 1.0),
-                intensity: 700_000.0,
-                range: 12.0,
-                shadow_maps_enabled: false,
-                ..default()
-            },
-            Transform::from_xyz(0.0, 1.5, 0.0),
-            Pulse { base: 700_000.0, phase: seed as f32 * 1.7 },
-        ))
-        .id();
-    c.entity(root).add_child(light);
-}
-
 pub fn pulse_lights(time: Res<Time>, mut q: Query<(&Pulse, &mut PointLight)>) {
     let t = time.elapsed_secs();
     for (p, mut l) in &mut q {
         l.intensity = p.base * (0.75 + 0.25 * (t * 2.1 + p.phase).sin() + 0.08 * (t * 7.3 + p.phase).sin());
-    }
-}
-
-/// Kristallgruppen schrumpfen, wenn sie abgebaut werden
-pub fn shrink_nodes(mut q: Query<(&ResourceNode, &mut Transform), Changed<ResourceNode>>) {
-    for (n, mut t) in &mut q {
-        if n.kind == ResKind::Ferrit {
-            let r = n.amount as f32 / n.max.max(1) as f32;
-            t.scale = Vec3::splat(0.35 + 0.65 * r);
-        }
     }
 }

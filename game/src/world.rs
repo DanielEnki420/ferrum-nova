@@ -1,6 +1,7 @@
 use crate::components::*;
 use crate::fx::FxKit;
 use crate::models::{self, ModelKit};
+use crate::resources;
 use crate::terrain::{self, FIELDS};
 use bevy::light::CascadeShadowConfigBuilder;
 use bevy::prelude::*;
@@ -106,8 +107,8 @@ pub fn setup_world(
             ))
             .id();
         match kind {
-            ResKind::Ferrit => models::build_ferrit(&mut commands, &kit, root, i as u32),
-            ResKind::Plasma => models::build_plasma(&mut commands, &kit, root, i as u32),
+            ResKind::Ferrit => resources::spawn_ferrit(&mut commands, &kit, &mut meshes, root, i as u32),
+            ResKind::Plasma => resources::spawn_plasma(&mut commands, &kit, &mut meshes, root, i as u32),
         }
     }
 
