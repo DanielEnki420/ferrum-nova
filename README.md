@@ -60,7 +60,7 @@ cd web && npx astro preview
   - **Vegetation:** Zehntausende Grashalme in Büscheln, Büsche und Kiefern, alles prozedural. Der Wind bewegt sie im Vertex-Shader (`wind.wesl`) mit Böen, die über die Ebene wandern.
   - **Fahrzeuge:** Panzer mit keilförmigem Turm, Kommandantenkuppel, Rohr mit Mündungsbremse, Nebelwerfern, Kettenumlauf, Laufrollen, Antriebsrad und Schürzen. Raketenwerfer mit Rohrbündel, Sammler als Sechsrad-Laster mit Erzbunker. Staub und Gebrauchsspuren stecken in den Vertexfarben.
   - **Licht:** HDR, Bloom, Dunst und Schatten, die sich an den Zoom anpassen.
-  - **Effekte:** Mündungsfeuer, Raketen-Rauchspuren, Explosionen mit Lichtblitz, Brandspuren und Qualm bei beschädigten Fahrzeugen.
+  - **Effekte:** Partikelsystem aus kamerazugewandten Flächen mit prozedural erzeugten Rauch-, Feuer- und Funkentexturen. Mündungsfeuer mit Staubaufwirbelung, Raketenstart mit Rückstrahl, Einschläge mit Funken, Erdfontäne, Brocken und Brandfleck. Explosionen mit mehrlagigem Feuerball, Druckwelle, Trümmern, die vom Gelände abprallen, Staubring, Rauchsäule und Lichtblitz. Zerstörte Fahrzeuge bleiben als verkohltes Wrack liegen (Turm teils abgesprengt), brennen, qualmen und versinken nach einer Minute.
 - Leistung: Statisches (Felsen, Vegetation) ist pro Kartenkachel zu einem Mesh zusammengefasst, jedes Fahrzeug besteht aus drei bis vier Meshes. **F3** blendet FPS, Bildzeit und Objektzahl ein und aus.
 - Steuerung: Linksklick oder Ziehen wählt aus, F wählt alle Kampfeinheiten. Rechtsklick bewegt, greift an oder baut ab. Strg+Rechtsklick ist ein Angriffsmarsch. WASD/Pfeile/Bildschirmrand bewegen die Kamera, Q/E drehen sie, das Mausrad zoomt.
 
@@ -71,6 +71,5 @@ cd web && npx astro preview
 - Nebel des Krieges und Minikarte
 - Diplomatie mit mehreren KI-Fraktionen
 - Mehrspieler über einen Rust-Server (WebSockets)
-- HQ und Rohstofffelder im selben Detailgrad wie die Fahrzeuge
 - Texturen als KTX2 (GPU-komprimiert) statt JPG, sobald KTX-Software verfügbar ist
 - Eigene Schriftart mit Umlauten für das HUD (die eingebaute Bevy-Schrift kann keine Umlaute)

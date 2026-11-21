@@ -88,6 +88,7 @@ fn main() {
                 fx::damage_smoke,
                 fx::spawn_effects,
                 fx::update_fx,
+                fx::update_wrecks,
                 models::pulse_lights,
                 buildings::spin,
                 resources::shrink_nodes,

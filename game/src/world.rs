@@ -10,9 +10,10 @@ pub fn setup_world(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
     mut mats: ResMut<Assets<StandardMaterial>>,
+    mut images: ResMut<Assets<Image>>,
 ) {
     let kit = ModelKit::new(&mut meshes, &mut mats);
-    commands.insert_resource(FxKit::new(&mut meshes, &mut mats));
+    commands.insert_resource(FxKit::new(&mut meshes, &mut mats, &mut images));
 
     // Das Gelände selbst entsteht in splat::finish_terrain, sobald die Texturen geladen sind
 

@@ -129,9 +129,9 @@ pub fn combat(
             },
         ));
         if !w.rocket {
-            fx.write(FxEvent::Muzzle(from));
+            fx.write(FxEvent::Muzzle { pos: from, dir: vel });
         } else {
-            fx.write(FxEvent::Puff { pos: from, dark: false });
+            fx.write(FxEvent::Launch { pos: from, dir: vel });
         }
     }
 }
@@ -377,7 +377,7 @@ pub fn projectiles(
             p.smoke_timer -= dt;
             if p.smoke_timer <= 0.0 {
                 p.smoke_timer = 0.05;
-                fx.write(FxEvent::Puff { pos: t.translation - dir * 0.6, dark: false });
+                fx.write(FxEvent::Trail(t.translation - dir * 0.6));
             }
         }
     }
@@ -386,11 +386,12 @@ pub fn projectiles(
 pub fn deaths(
     mut commands: Commands,
     mut fx: MessageWriter<FxEvent>,
-    q: Query<(Entity, &Health, &Transform, Has<Building>)>,
+    q: Query<(Entity, &Health, &Transform, Has<Building>, Option<&Unit>, Option<&Team>)>,
 ) {
-    for (e, h, t, building) in &q {
+    for (e, h, t, building, unit, team) in &q {
         if h.hp <= 0.0 {
-            fx.write(FxEvent::Death { pos: t.translation, big: building });
+            let wreck = unit.zip(team).map(|(u, team)| crate::fx::WreckInfo { kind: u.kind, team: *team, rot: t.rotation });
+            fx.write(FxEvent::Death { pos: t.translation, big: building, wreck });
             commands.entity(e).try_despawn();
         }
     }
