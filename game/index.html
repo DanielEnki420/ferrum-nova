@@ -13,5 +13,9 @@
 </head>
 <body>
   <canvas id="game" tabindex="0"></canvas>
+  <script>
+    // Kein Browser-Kontextmenü im Spiel: Rechtsklick und (auf dem Mac) Strg+Klick sind Spielbefehle
+    document.addEventListener('contextmenu', (e) => e.preventDefault());
+  </script>
 </body>
 </html>
