@@ -2,27 +2,21 @@
 //! Vorne ist bei allen Modellen -Z, der Ursprung liegt auf dem Boden.
 
 use crate::components::*;
+use crate::buildings::{self, HqMeshes, Spin};
 use crate::vehicles::{self, VehicleMeshes};
 use bevy::light::NotShadowCaster;
 use bevy::prelude::*;
 
 #[derive(Resource)]
 pub struct ModelKit {
-    pub cube: Handle<Mesh>,
     pub cyl: Handle<Mesh>,
-    pub cyl8: Handle<Mesh>,
-    pub sphere: Handle<Mesh>,
     pub tracer: Handle<Mesh>,
     pub crystal: Handle<Mesh>,
     pub ring: Handle<Mesh>,
-    pub paint: [Handle<StandardMaterial>; 2],
-    pub paint_dark: [Handle<StandardMaterial>; 2],
     pub glow: [Handle<StandardMaterial>; 2],
     pub tracer_mat: [Handle<StandardMaterial>; 2],
     pub rocket_mat: [Handle<StandardMaterial>; 2],
-    pub metal: Handle<StandardMaterial>,
     pub glass: Handle<StandardMaterial>,
-    pub concrete: Handle<StandardMaterial>,
     pub ferrit: Handle<StandardMaterial>,
     pub plasma: Handle<StandardMaterial>,
     pub crater: Handle<StandardMaterial>,
@@ -30,19 +24,13 @@ pub struct ModelKit {
     pub vehicles: [[VehicleMeshes; 2]; 3],
     /// Fahrzeuglack: Farbe kommt aus den Vertexfarben
     pub vehicle_mat: Handle<StandardMaterial>,
+    pub hq: [HqMeshes; 2],
+    /// Beton und Bauteile der Gebäude (Farbe aus den Vertexfarben)
+    pub building_mat: Handle<StandardMaterial>,
 }
 
 impl ModelKit {
     pub fn new(meshes: &mut Assets<Mesh>, mats: &mut Assets<StandardMaterial>) -> Self {
-        let paint = |m: &mut Assets<StandardMaterial>, r, g, b| {
-            m.add(StandardMaterial {
-                base_color: Color::srgb(r, g, b),
-                perceptual_roughness: 0.62,
-                metallic: 0.15,
-                reflectance: 0.4,
-                ..default()
-            })
-        };
         let glow = |m: &mut Assets<StandardMaterial>, c: LinearRgba| {
             m.add(StandardMaterial {
                 base_color: Color::BLACK,
@@ -57,15 +45,10 @@ impl ModelKit {
             .expect("Kristall-Mesh");
 
         Self {
-            cube: meshes.add(Cuboid::new(1.0, 1.0, 1.0)),
             cyl: meshes.add(Cylinder::new(0.5, 1.0).mesh().resolution(20)),
-            cyl8: meshes.add(Cylinder::new(0.5, 1.0).mesh().resolution(8)),
-            sphere: meshes.add(Sphere::new(0.5).mesh().uv(16, 10)),
             tracer: meshes.add(Capsule3d::new(0.05, 0.8)),
             crystal: meshes.add(crystal),
             ring: meshes.add(Torus::new(1.3, 2.2)),
-            paint: [paint(mats, 0.36, 0.52, 0.74), paint(mats, 0.62, 0.16, 0.13)],
-            paint_dark: [paint(mats, 0.19, 0.26, 0.36), paint(mats, 0.26, 0.09, 0.08)],
             glow: [
                 glow(mats, LinearRgba::rgb(0.6, 4.0, 9.0)),
                 glow(mats, LinearRgba::rgb(9.0, 0.8, 0.3)),
@@ -78,21 +61,10 @@ impl ModelKit {
                 glow(mats, LinearRgba::rgb(8.0, 6.0, 3.0)),
                 glow(mats, LinearRgba::rgb(14.0, 3.0, 1.0)),
             ],
-            metal: mats.add(StandardMaterial {
-                base_color: Color::srgb(0.22, 0.22, 0.23),
-                metallic: 0.85,
-                perceptual_roughness: 0.38,
-                ..default()
-            }),
             glass: mats.add(StandardMaterial {
                 base_color: Color::srgb(0.05, 0.09, 0.14),
                 perceptual_roughness: 0.06,
                 reflectance: 0.9,
-                ..default()
-            }),
-            concrete: mats.add(StandardMaterial {
-                base_color: Color::srgb(0.48, 0.47, 0.44),
-                perceptual_roughness: 0.92,
                 ..default()
             }),
             ferrit: mats.add(StandardMaterial {
@@ -122,6 +94,13 @@ impl ModelKit {
                 perceptual_roughness: 0.58,
                 metallic: 0.22,
                 reflectance: 0.45,
+                ..default()
+            }),
+            hq: [buildings::build_hq(PLAYER, meshes), buildings::build_hq(ENEMY, meshes)],
+            building_mat: mats.add(StandardMaterial {
+                perceptual_roughness: 0.8,
+                metallic: 0.08,
+                reflectance: 0.35,
                 ..default()
             }),
         }
@@ -178,32 +157,12 @@ pub fn build_unit(c: &mut Commands, k: &ModelKit, root: Entity, team: Team, kind
 /// Hauptquartier
 pub fn build_hq(c: &mut Commands, k: &ModelKit, root: Entity, team: Team) {
     let t = team.0 as usize;
-    part(c, root, &k.cube, &k.concrete, tf(0.0, 0.2, 0.0, 9.4, 0.5, 9.4));
-    part(c, root, &k.cube, &k.paint_dark[t], tf(0.0, 0.48, 0.0, 9.6, 0.06, 9.6));
-    part(c, root, &k.cube, &k.paint[t], tf(0.0, 1.75, -0.6, 6.0, 2.6, 4.6));
-    part(c, root, &k.cube, &k.paint_dark[t], tf(0.0, 3.6, -0.9, 4.2, 1.2, 3.4));
-    // Fensterbänder
-    part(c, root, &k.cube, &k.glow[t], tf(0.0, 2.25, -0.6, 6.04, 0.16, 4.64));
-    part(c, root, &k.cube, &k.glass, tf(0.0, 3.65, -2.61, 3.6, 0.5, 0.04));
-    // Tor
-    part(c, root, &k.cube, &k.metal, tf(0.0, 1.15, 1.71, 2.6, 1.5, 0.06));
-    // Turm mit Radarkuppel
-    part(c, root, &k.cyl, &k.metal, tf(2.9, 2.9, 2.6, 1.3, 5.0, 1.3));
-    part(c, root, &k.sphere, &k.concrete, tf(2.9, 5.7, 2.6, 1.9, 1.4, 1.9));
-    part(c, root, &k.sphere, &k.glow[t], tf(2.9, 6.45, 2.6, 0.3, 0.3, 0.3));
-    // Antennen
-    part(c, root, &k.cyl8, &k.metal, tf(-1.5, 5.6, -1.6, 0.08, 3.0, 0.08));
-    part(c, root, &k.cyl8, &k.metal, tf(-0.9, 5.0, -1.9, 0.06, 1.8, 0.06));
-    // Tanks
-    for (x, z) in [(-3.5, 2.6), (-2.2, 3.4)] {
-        part(c, root, &k.cyl, &k.concrete, tf(x, 1.3, z, 1.3, 1.7, 1.3));
-        part(c, root, &k.cyl, &k.paint_dark[t], tf(x, 2.2, z, 1.35, 0.12, 1.35));
-    }
-    // Lampen an den Ecken
-    for (x, z) in [(-4.4, -4.4), (4.4, -4.4), (-4.4, 4.4), (4.4, 4.4)] {
-        part(c, root, &k.cyl8, &k.metal, tf(x, 1.0, z, 0.12, 1.6, 0.12));
-        part(c, root, &k.sphere, &k.glow[t], tf(x, 1.85, z, 0.22, 0.22, 0.22));
-    }
+    let hq = &k.hq[t];
+    part(c, root, &hq.body, &k.building_mat, Transform::default());
+    part(c, root, &hq.glow, &k.glow[t], Transform::default());
+    part(c, root, &hq.glass, &k.glass, Transform::default());
+    let dish = part(c, root, &hq.dish, &k.building_mat, Transform::from_translation(hq.dish_pos));
+    c.entity(dish).insert(Spin(1.2));
     let light = c
         .spawn((
             PointLight {

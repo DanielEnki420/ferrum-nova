@@ -5,6 +5,7 @@
 #![allow(clippy::too_many_arguments, clippy::type_complexity)]
 
 mod ai;
+mod buildings;
 mod components;
 mod fx;
 mod hud;
@@ -87,6 +88,7 @@ fn main() {
                 fx::spawn_effects,
                 fx::update_fx,
                 models::pulse_lights,
+                buildings::spin,
                 models::shrink_nodes,
                 input::update_shadows,
             )

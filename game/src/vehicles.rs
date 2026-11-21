@@ -25,20 +25,20 @@ pub struct VehicleMeshes {
 
 /// Geometrie-Sammler mit Vertexfarben
 #[derive(Default)]
-struct Geo {
+pub(crate) struct Geo {
     pos: Vec<[f32; 3]>,
     nrm: Vec<[f32; 3]>,
     col: Vec<[f32; 4]>,
     idx: Vec<u32>,
 }
 
-fn lin(c: Color) -> Vec3 {
+pub(crate) fn lin(c: Color) -> Vec3 {
     let l = LinearRgba::from(c);
     Vec3::new(l.red, l.green, l.blue)
 }
 
 impl Geo {
-    fn tri(&mut self, a: Vec3, b: Vec3, c: Vec3, col: Vec3) {
+    pub(crate) fn tri(&mut self, a: Vec3, b: Vec3, c: Vec3, col: Vec3) {
         let n = (b - a).cross(c - a).normalize_or_zero();
         let base = self.pos.len() as u32;
         for p in [a, b, c] {
@@ -51,7 +51,7 @@ impl Geo {
 
     /// Verbindet zwei gleich lange, konvexe Ringe (Seitenflächen plus Deckel).
     /// Die Flächen werden flach schattiert und zeigen automatisch nach außen.
-    fn loft(&mut self, a: &[Vec3], b: &[Vec3], col: Vec3) {
+    pub(crate) fn loft(&mut self, a: &[Vec3], b: &[Vec3], col: Vec3) {
         let n = a.len();
         let center = (a.iter().sum::<Vec3>() + b.iter().sum::<Vec3>()) / (2 * n) as f32;
         let mut face = |pts: &[Vec3]| {
@@ -76,25 +76,25 @@ impl Geo {
     }
 
     /// Seitenprofil (z, y) entlang x extrudieren
-    fn extrude_x(&mut self, profile: &[Vec2], x0: f32, x1: f32, col: Vec3) {
+    pub(crate) fn extrude_x(&mut self, profile: &[Vec2], x0: f32, x1: f32, col: Vec3) {
         let a: Vec<Vec3> = profile.iter().map(|p| Vec3::new(x0, p.y, p.x)).collect();
         let b: Vec<Vec3> = profile.iter().map(|p| Vec3::new(x1, p.y, p.x)).collect();
         self.loft(&a, &b, col);
     }
 
     /// Grundriss (x, z) von y0 bis y1, oben auf `top_scale` verjüngt und um `top_shift` (z) versetzt
-    fn extrude_y(&mut self, plan: &[Vec2], y0: f32, y1: f32, top_scale: f32, top_shift: f32, col: Vec3) {
+    pub(crate) fn extrude_y(&mut self, plan: &[Vec2], y0: f32, y1: f32, top_scale: f32, top_shift: f32, col: Vec3) {
         let a: Vec<Vec3> = plan.iter().map(|p| Vec3::new(p.x, y0, p.y)).collect();
         let b: Vec<Vec3> = plan.iter().map(|p| Vec3::new(p.x * top_scale, y1, p.y * top_scale + top_shift)).collect();
         self.loft(&a, &b, col);
     }
 
-    fn cuboid(&mut self, center: Vec3, size: Vec3, rot: Quat, col: Vec3) {
+    pub(crate) fn cuboid(&mut self, center: Vec3, size: Vec3, rot: Quat, col: Vec3) {
         self.mesh(Cuboid::from_size(size).mesh().build(), Transform::from_translation(center).with_rotation(rot), col);
     }
 
     /// Ein Bevy-Primitiv übernehmen
-    fn mesh(&mut self, mesh: Mesh, tf: Transform, col: Vec3) {
+    pub(crate) fn mesh(&mut self, mesh: Mesh, tf: Transform, col: Vec3) {
         let m = mesh.transformed_by(tf);
         let Some(VertexAttributeValues::Float32x3(p)) = m.attribute(Mesh::ATTRIBUTE_POSITION) else { return };
         let Some(VertexAttributeValues::Float32x3(n)) = m.attribute(Mesh::ATTRIBUTE_NORMAL) else { return };
@@ -110,19 +110,19 @@ impl Geo {
     }
 
     /// Zylinder entlang einer Achse (Rad, Rohr)
-    fn cyl(&mut self, center: Vec3, radius: f32, len: f32, axis: Vec3, res: u32, col: Vec3) {
+    pub(crate) fn cyl(&mut self, center: Vec3, radius: f32, len: f32, axis: Vec3, res: u32, col: Vec3) {
         let rot = Quat::from_rotation_arc(Vec3::Y, axis.normalize());
         self.mesh(Cylinder::new(radius, len).mesh().resolution(res).build(), Transform::from_translation(center).with_rotation(rot), col);
     }
 
-    fn frustum(&mut self, center: Vec3, r_bottom: f32, r_top: f32, len: f32, axis: Vec3, res: u32, col: Vec3) {
+    pub(crate) fn frustum(&mut self, center: Vec3, r_bottom: f32, r_top: f32, len: f32, axis: Vec3, res: u32, col: Vec3) {
         let rot = Quat::from_rotation_arc(Vec3::Y, axis.normalize());
         let m = ConicalFrustum { radius_top: r_top, radius_bottom: r_bottom, height: len }.mesh().resolution(res).build();
         self.mesh(m, Transform::from_translation(center).with_rotation(rot), col);
     }
 
     /// Staub nach unten hin, leichte Fleckigkeit, Kanten etwas aufgehellt
-    fn weather(&mut self, dust: Vec3, dust_top: f32, amount: f32) {
+    pub(crate) fn weather(&mut self, dust: Vec3, dust_top: f32, amount: f32) {
         for (p, c) in self.pos.iter().zip(self.col.iter_mut()) {
             let v = Vec3::from_array(*p);
             let h = ((v.x * 12.9898 + v.y * 78.233 + v.z * 37.719).sin() * 43_758.547).fract().abs();
@@ -134,7 +134,7 @@ impl Geo {
         }
     }
 
-    fn build(self) -> Option<Mesh> {
+    pub(crate) fn build(self) -> Option<Mesh> {
         if self.idx.is_empty() {
             return None;
         }
@@ -149,17 +149,17 @@ impl Geo {
 }
 
 /// Farbpalette eines Teams
-struct Palette {
-    paint: Vec3,
-    paint_dark: Vec3,
-    marking: Vec3,
-    metal: Vec3,
-    steel_dark: Vec3,
-    rubber: Vec3,
-    dust: Vec3,
+pub(crate) struct Palette {
+    pub(crate) paint: Vec3,
+    pub(crate) paint_dark: Vec3,
+    pub(crate) marking: Vec3,
+    pub(crate) metal: Vec3,
+    pub(crate) steel_dark: Vec3,
+    pub(crate) rubber: Vec3,
+    pub(crate) dust: Vec3,
 }
 
-fn palette(team: Team) -> Palette {
+pub(crate) fn palette(team: Team) -> Palette {
     let (paint, dark, mark) = if team == PLAYER {
         (Color::srgb(0.40, 0.47, 0.50), Color::srgb(0.25, 0.29, 0.31), Color::srgb(0.55, 0.78, 0.95))
     } else {
