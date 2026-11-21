@@ -1,6 +1,6 @@
 //! Baubare Gebäude: Platzieren mit Vorschau, Errichten, Funktion.
 //!
-//! - Der Spieler wählt ein Gebäude (Taste 4–6 oder Knopf). Eine durchscheinende Vorschau folgt
+//! - Der Spieler wählt ein Gebäude (Taste 7–9 oder Knopf). Eine durchscheinende Vorschau folgt
 //!   der Maus, grün auf gültigem Platz, rot sonst. Linksklick baut, Shift hält den Baumodus,
 //!   Rechtsklick oder Esc bricht ab.
 //! - Gebaut wird nur in Reichweite eigener Gebäude, auf nicht zu steilem Boden und mit Abstand
@@ -117,7 +117,7 @@ pub fn spawn_structure(c: &mut Commands, kit: &ModelKit, team: Team, kind: Build
     }
     match kind {
         BuildingKind::Geschuetzturm => {
-            c.entity(root).insert(Weapon { range: 17.0, damage: 24.0, cooldown: 1.2, timer: 0.0, projectile_speed: 44.0, rocket: false });
+            c.entity(root).insert(Weapon { range: 17.0, damage: 24.0, cooldown: 1.2, timer: 0.0, projectile_speed: 44.0, rocket: false, splash: 0.0, arc: 0.0 });
         }
         BuildingKind::Raffinerie => {
             c.entity(root).insert(Depot);
@@ -149,9 +149,9 @@ pub fn placement_input(
     mut gizmos: Gizmos,
 ) {
     for (key, kind) in [
-        (KeyCode::Digit4, BuildingKind::Geschuetzturm),
-        (KeyCode::Digit5, BuildingKind::Raffinerie),
-        (KeyCode::Digit6, BuildingKind::Fabrik),
+        (KeyCode::Digit7, BuildingKind::Geschuetzturm),
+        (KeyCode::Digit8, BuildingKind::Raffinerie),
+        (KeyCode::Digit9, BuildingKind::Fabrik),
     ] {
         if keys.just_pressed(key) {
             placing.kind = if placing.kind == Some(kind) { None } else { Some(kind) };

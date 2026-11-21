@@ -39,6 +39,12 @@ pub enum FxEvent {
     Puff { pos: Vec3, dark: bool },
     /// Staubwolke beim Baubeginn und bei Fertigstellung eines Gebäudes
     BuildDust { pos: Vec3, radius: f32 },
+    /// Staubfahne hinter fahrenden Fahrzeugen
+    Dust { pos: Vec3, size: f32 },
+    /// Fahrspur im Boden (beide Ketten bzw. Radspuren in einem Abdruck)
+    Track { pos: Vec3, rot: Quat, width: f32 },
+    /// Kleine Flamme an schwer beschädigten Fahrzeugen
+    Flame(Vec3),
 }
 
 /// Aussehen eines Partikels (Index in die Materialtabelle)
@@ -60,6 +66,7 @@ pub struct FxKit {
     chunk: Handle<Mesh>,
     looks: Vec<[Handle<StandardMaterial>; LEVELS]>,
     scorch: [Handle<StandardMaterial>; LEVELS],
+    tracks: [Handle<StandardMaterial>; LEVELS],
     debris_rock: Handle<StandardMaterial>,
     debris_metal: Handle<StandardMaterial>,
     wreck: Handle<StandardMaterial>,
@@ -141,6 +148,22 @@ fn shock_tex() -> Image {
     })
 }
 
+/// Zwei Spurbänder mit Stollenmuster (Kette oder Reifenprofil)
+fn track_tex() -> Image {
+    texture(64, |u, v| {
+        // Spurmitten bei ±1/2,6 der Abdruckbreite (Breite = Spurweite · 2,6)
+        let band = |c: f32| {
+            let d = (u - c).abs();
+            ss(0.12, 0.085, d)
+        };
+        let lanes = band(0.115) + band(0.885);
+        let cleat = 0.55 + 0.45 * ss(0.2, 0.5, ((v * 9.0).fract() - 0.5).abs() * 2.0);
+        let n = terrain::fbm(u * 6.0, v * 6.0, 29, 3) * 0.5 + 0.5;
+        let a = lanes * cleat * (0.6 + 0.4 * n);
+        [0.12, 0.10, 0.08, a * 0.55]
+    })
+}
+
 fn scorch_tex() -> Image {
     texture(128, |u, v| {
         let (d, n) = polar(u, v, 17, 5.0);
@@ -157,6 +180,7 @@ impl FxKit {
         let spark = images.add(spark_tex());
         let shock = images.add(shock_tex());
         let scorch = images.add(scorch_tex());
+        let track = images.add(track_tex());
 
         let blend = |mats: &mut Assets<StandardMaterial>, tex: &Handle<Image>, r: f32, g: f32, b: f32, peak: f32| {
             std::array::from_fn(|i| {
@@ -206,6 +230,16 @@ impl FxKit {
             })
         });
 
+        let tracks = std::array::from_fn(|i| {
+            mats.add(StandardMaterial {
+                base_color: Color::srgba(1.0, 1.0, 1.0, i as f32 / (LEVELS - 1) as f32),
+                base_color_texture: Some(track.clone()),
+                alpha_mode: AlphaMode::Blend,
+                perceptual_roughness: 1.0,
+                reflectance: 0.0,
+                ..default()
+            })
+        });
         let mut chunk = Sphere::new(0.5).mesh().ico(0).expect("Trümmer");
         chunk.scale_by(Vec3::new(1.0, 0.6, 0.8));
         chunk.duplicate_vertices();
@@ -217,6 +251,7 @@ impl FxKit {
             chunk: meshes.add(chunk),
             looks,
             scorch,
+            tracks,
             debris_rock: mats.add(StandardMaterial {
                 base_color: Color::srgb(0.30, 0.27, 0.23),
                 perceptual_roughness: 0.95,
@@ -281,6 +316,7 @@ pub struct Decal {
     level: usize,
     grow: f32,
     size: f32,
+    track: bool,
 }
 
 #[derive(Component)]
@@ -408,7 +444,21 @@ impl Spawner<'_, '_, '_> {
                 .with_rotation(Quat::from_rotation_arc(Vec3::Y, n) * Quat::from_rotation_y(self.rng.range(0.0, TAU)))
                 .with_scale(Vec3::splat(size)),
             NotShadowCaster,
-            Decal { age: 0.0, life, peak: 1.0, level: LEVELS - 1, grow: 0.0, size },
+            Decal { age: 0.0, life, peak: 1.0, level: LEVELS - 1, grow: 0.0, size, track: false },
+        ));
+    }
+
+    fn track(&mut self, pos: Vec3, rot: Quat, width: f32) {
+        let g = terrain::on_ground(pos);
+        let n = terrain::normal(g.x, g.z);
+        self.c.spawn((
+            Mesh3d(self.kit.ground.clone()),
+            MeshMaterial3d(self.kit.tracks[LEVELS - 1].clone()),
+            Transform::from_translation(g + n * 0.03)
+                .with_rotation(Quat::from_rotation_arc(Vec3::Y, n) * rot)
+                .with_scale(Vec3::new(width, 1.0, 1.45)),
+            NotShadowCaster,
+            Decal { age: 0.0, life: 16.0, peak: 1.0, level: LEVELS - 1, grow: 0.0, size: 1.0, track: true },
         ));
     }
 
@@ -420,7 +470,7 @@ impl Spawner<'_, '_, '_> {
             Transform::from_translation(g + Vec3::Y * 0.15).with_scale(Vec3::splat(size * 0.2)),
             NotShadowCaster,
             NotShadowReceiver,
-            Decal { age: 0.0, life: 0.45, peak: 1.0, level: usize::MAX, grow: size, size: size * 0.2 },
+            Decal { age: 0.0, life: 0.45, peak: 1.0, level: usize::MAX, grow: size, size: size * 0.2, track: false },
         ));
     }
 
@@ -519,6 +569,17 @@ pub fn spawn_effects(
             FxEvent::BuildDust { pos, radius } => {
                 s.dust_ring(pos, 14, radius * 1.1, radius * 0.9);
             }
+            FxEvent::Dust { pos, size } => {
+                let v = Vec3::new(s.rng.range(-0.3, 0.3), s.rng.range(0.2, 0.5), s.rng.range(-0.3, 0.3));
+                let life = s.rng.range(1.0, 1.6);
+                s.particle(Look::Dust, pos, v, life, size * 0.5, size * 2.2, 0.32);
+            }
+            FxEvent::Track { pos, rot, width } => s.track(pos, rot, width),
+            FxEvent::Flame(pos) => {
+                let life = s.rng.range(0.3, 0.5);
+                let v = Vec3::new(s.rng.range(-0.2, 0.2), 2.2, s.rng.range(-0.2, 0.2));
+                s.particle(Look::Fire, pos, v, life, 0.5, 0.15, 1.0);
+            }
             FxEvent::Puff { pos, dark } => {
                 let look = if dark { Look::SmokeDark } else { Look::SmokeLight };
                 s.smoke(look, pos, 1, 0.9, 2.0, 0.9, 0.1, if dark { 0.7 } else { 0.5 });
@@ -528,11 +589,7 @@ pub fn spawn_effects(
 }
 
 fn spawn_wreck(c: &mut Commands, kit: &FxKit, models: &ModelKit, rng: &mut Rng, pos: Vec3, w: WreckInfo) {
-    let vm = match w.kind {
-        UnitKind::Sammler => &models.vehicles[0][w.team.0 as usize],
-        UnitKind::Panzer => &models.vehicles[1][w.team.0 as usize],
-        UnitKind::Werfer => &models.vehicles[2][w.team.0 as usize],
-    };
+    let vm = &models.vehicles[w.kind.idx()][w.team.0 as usize];
     let ground = terrain::on_ground(pos);
     let tilt = Quat::from_rotation_x(rng.range(-0.08, 0.08)) * Quat::from_rotation_z(rng.range(-0.1, 0.1));
     let root = c
@@ -543,6 +600,9 @@ fn spawn_wreck(c: &mut Commands, kit: &FxKit, models: &ModelKit, rng: &mut Rng, 
         ))
         .id();
     c.entity(root).with_child((Mesh3d(vm.hull.clone()), MeshMaterial3d(kit.wreck.clone())));
+    for (m, p, _) in &vm.wheels {
+        c.entity(root).with_child((Mesh3d(m.clone()), MeshMaterial3d(kit.wreck.clone()), Transform::from_translation(*p)));
+    }
     if let Some(t) = &vm.turret {
         // Turm verdreht oder abgesprengt
         let blown = rng.next_f32() < 0.35;
@@ -551,8 +611,8 @@ fn spawn_wreck(c: &mut Commands, kit: &FxKit, models: &ModelKit, rng: &mut Rng, 
             Transform::from_xyz(a.cos() * 2.4, 0.15, a.sin() * 2.4)
                 .with_rotation(Quat::from_rotation_y(rng.range(0.0, TAU)) * Quat::from_rotation_z(rng.range(-0.5, 0.5)))
         } else {
-            let y = if w.kind == UnitKind::Werfer { 1.05 } else { 0.86 };
-            Transform::from_xyz(rng.range(-0.1, 0.1), y, 0.1).with_rotation(Quat::from_rotation_y(rng.range(-1.2, 1.2)) * Quat::from_rotation_x(rng.range(-0.15, 0.05)))
+            let m = w.kind.mount().map_or((0.86, 0.1), |m| (m.y, m.z));
+            Transform::from_xyz(rng.range(-0.1, 0.1), m.0, m.1).with_rotation(Quat::from_rotation_y(rng.range(-1.2, 1.2)) * Quat::from_rotation_x(rng.range(-0.15, 0.05)))
         };
         c.entity(root).with_child((Mesh3d(t.clone()), MeshMaterial3d(kit.wreck.clone()), tf));
     }
@@ -653,7 +713,9 @@ pub fn update_fx(
             t.scale = Vec3::splat(s);
             ((1.0 - k).powi(2) * d.peak, &kit.looks[Look::Shock as usize])
         } else {
-            (if k > 0.75 { d.peak * (1.0 - (k - 0.75) / 0.25) } else { d.peak }, &kit.scorch)
+            let fade_from = if d.track { 0.4 } else { 0.75 };
+            let a = if k > fade_from { d.peak * (1.0 - (k - fade_from) / (1.0 - fade_from)) } else { d.peak };
+            (a, if d.track { &kit.tracks } else { &kit.scorch })
         };
         let level = ((alpha * (LEVELS - 1) as f32).round() as usize).min(LEVELS - 1);
         if level != d.level {
@@ -734,6 +796,9 @@ pub fn damage_smoke(
             let spread = if building { 2.5 } else { 0.3 };
             let off = Vec3::new(rng.range(-spread, spread), up, rng.range(-spread, spread));
             w.write(FxEvent::Puff { pos: t.translation + off, dark: true });
+            if frac < 0.25 {
+                w.write(FxEvent::Flame(t.translation + off * 0.8));
+            }
         }
     }
 }

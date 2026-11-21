@@ -18,14 +18,43 @@ pub enum UnitKind {
     Sammler,
     Panzer,
     Werfer,
+    /// Schneller Radpanzer mit Maschinenkanone
+    Spaeher,
+    /// Schwerer Kampfpanzer (braucht eine Fabrik)
+    Bollwerk,
+    /// Selbstfahrende Haubitze mit großer Reichweite und Flächenschaden (braucht eine Fabrik)
+    Haubitze,
+}
+
+/// Lage des drehbaren Aufbaus: Neigung, Höhe und Versatz des Drehpunkts in der Wanne
+#[derive(Clone, Copy)]
+pub struct Mount {
+    pub tilt: f32,
+    pub y: f32,
+    pub z: f32,
 }
 
 impl UnitKind {
+    pub const ALL: [UnitKind; 6] = [
+        UnitKind::Sammler,
+        UnitKind::Spaeher,
+        UnitKind::Panzer,
+        UnitKind::Bollwerk,
+        UnitKind::Werfer,
+        UnitKind::Haubitze,
+    ];
+
+    pub fn idx(self) -> usize {
+        self as usize
+    }
     pub fn name(self) -> &'static str {
         match self {
             UnitKind::Sammler => "Sammler",
             UnitKind::Panzer => "Panzer",
             UnitKind::Werfer => "Raketenwerfer",
+            UnitKind::Spaeher => "Spaeher",
+            UnitKind::Bollwerk => "Bollwerk",
+            UnitKind::Haubitze => "Haubitze",
         }
     }
     pub fn short_name(self) -> &'static str {
@@ -40,6 +69,9 @@ impl UnitKind {
             UnitKind::Sammler => [50, 0],
             UnitKind::Panzer => [100, 25],
             UnitKind::Werfer => [80, 70],
+            UnitKind::Spaeher => [60, 10],
+            UnitKind::Bollwerk => [220, 90],
+            UnitKind::Haubitze => [150, 110],
         }
     }
     pub fn build_time(self) -> f32 {
@@ -47,6 +79,41 @@ impl UnitKind {
             UnitKind::Sammler => 4.0,
             UnitKind::Panzer => 5.0,
             UnitKind::Werfer => 6.5,
+            UnitKind::Spaeher => 3.5,
+            UnitKind::Bollwerk => 9.0,
+            UnitKind::Haubitze => 8.0,
+        }
+    }
+    /// Schwere Typen lassen sich erst mit einer fertigen Fabrik bauen
+    pub fn needs_factory(self) -> bool {
+        matches!(self, UnitKind::Bollwerk | UnitKind::Haubitze)
+    }
+    /// Spurweite (Abstand Mitte Kette/Rad zur Fahrzeugmitte)
+    pub fn gauge(self) -> f32 {
+        match self {
+            UnitKind::Bollwerk => 0.95,
+            UnitKind::Spaeher => 0.78,
+            _ => 0.72,
+        }
+    }
+    pub fn mount(self) -> Option<Mount> {
+        match self {
+            UnitKind::Sammler => None,
+            UnitKind::Panzer => Some(Mount { tilt: 0.0, y: 0.86, z: 0.1 }),
+            UnitKind::Werfer => Some(Mount { tilt: 0.35, y: 1.05, z: 0.25 }),
+            UnitKind::Spaeher => Some(Mount { tilt: 0.0, y: 1.08, z: 0.15 }),
+            UnitKind::Bollwerk => Some(Mount { tilt: 0.0, y: 1.0, z: 0.15 }),
+            UnitKind::Haubitze => Some(Mount { tilt: 0.42, y: 0.98, z: 0.45 }),
+        }
+    }
+    /// Mündung: Abstand nach vorn und Höhe über dem Boden
+    pub fn muzzle(self) -> (f32, f32) {
+        match self {
+            UnitKind::Werfer => (1.0, 1.5),
+            UnitKind::Spaeher => (1.5, 1.3),
+            UnitKind::Bollwerk => (3.0, 1.25),
+            UnitKind::Haubitze => (2.2, 2.6),
+            _ => (2.2, 1.05),
         }
     }
 }
@@ -66,7 +133,40 @@ pub struct Weapon {
     pub timer: f32,
     pub projectile_speed: f32,
     pub rocket: bool,
+    /// Radius des Flächenschadens (0 = nur das Ziel)
+    pub splash: f32,
+    /// Bogenhöhe im Verhältnis zur Schussweite (0 = gerade Bahn)
+    pub arc: f32,
 }
+
+/// Fahrdaten eines Fahrzeugs für Animationen
+#[derive(Component, Default)]
+pub struct Motion {
+    pub prev: Vec3,
+    /// zurückgelegte Strecke (vorwärts positiv)
+    pub dist: f32,
+    /// geglättete Geschwindigkeit
+    pub speed: f32,
+    /// Rückstoß nach einem Schuss (1 = gerade gefeuert)
+    pub recoil: f32,
+    /// Strecke bis zur nächsten Fahrspur
+    pub track_d: f32,
+    pub dust_t: f32,
+}
+
+/// Rad, Antriebs- oder Leitrad, das sich beim Fahren dreht
+#[derive(Component)]
+pub struct Wheel {
+    pub radius: f32,
+}
+
+/// Bauteile im Fahrzeuglack (werden bei schweren Schäden verkohlt dargestellt)
+#[derive(Component)]
+pub struct PaintParts(pub Vec<Entity>);
+
+/// Sichtbare Ladung im Erzbunker eines Sammlers
+#[derive(Component)]
+pub struct CargoRef(pub Entity);
 
 /// Fahrtrichtung als Winkel um die Hochachse (0 = Blick nach -Z)
 #[derive(Component)]
@@ -84,6 +184,12 @@ pub struct Turret {
     pub tilt: f32,
     pub base_y: f32,
     pub base_z: f32,
+}
+
+impl From<Mount> for Turret {
+    fn from(m: Mount) -> Self {
+        Turret { tilt: m.tilt, base_y: m.y, base_z: m.z }
+    }
 }
 
 /// Verweis vom Fahrzeug auf seinen Turm
@@ -247,6 +353,13 @@ pub struct Projectile {
     pub speed: f32,
     pub rocket: bool,
     pub smoke_timer: f32,
+    pub team: Team,
+    pub splash: f32,
+    pub arc: f32,
+    /// Position auf der geraden Bahn (ohne Bogen)
+    pub base: Vec3,
+    pub traveled: f32,
+    pub total: f32,
 }
 
 /// Bestände je Team: [Ferrit, Plasma]

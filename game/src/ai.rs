@@ -9,7 +9,7 @@ pub struct AiState {
     pub think: f32,
     pub next_attack: f32,
     pub wave_size: usize,
-    pub alternate: bool,
+    pub cycle: u32,
     pub elapsed: f32,
     /// Wartezeit bis zum nächsten Gebäude
     pub build_cd: f32,
@@ -21,7 +21,7 @@ impl Default for AiState {
             think: 0.0,
             next_attack: 150.0,
             wave_size: 5,
-            alternate: false,
+            cycle: 0,
             elapsed: 0.0,
             build_cd: 30.0,
         }
@@ -121,11 +121,20 @@ pub fn enemy_ai(
     }
 
     if queue_len < 2 && (!saving || harvesters < 4) {
+        // Aufträge für schwere Typen ohne fertige Fabrik lehnt das HQ ab; dann geht es eben weiter
+        let factory = count(BuildingKind::Fabrik) > 0;
         let kind = if harvesters < 4 {
             UnitKind::Sammler
         } else {
-            ai.alternate = !ai.alternate;
-            if ai.alternate { UnitKind::Panzer } else { UnitKind::Werfer }
+            // Rotation durch die Kampftypen, schwere Typen erst mit Fabrik
+            ai.cycle = (ai.cycle + 1) % 8;
+            match (ai.cycle, factory) {
+                (0 | 4, _) => UnitKind::Spaeher,
+                (2, true) => UnitKind::Bollwerk,
+                (6, true) => UnitKind::Haubitze,
+                (1 | 5 | 2, _) => UnitKind::Panzer,
+                _ => UnitKind::Werfer,
+            }
         };
         builds.write(BuildRequest { team: ENEMY, kind });
     }

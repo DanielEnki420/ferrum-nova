@@ -146,20 +146,23 @@ pub fn setup_world(
 }
 
 pub fn spawn_unit(commands: &mut Commands, kit: &ModelKit, team: Team, kind: UnitKind, pos: Vec3) -> Entity {
+    let gun = |range: f32, damage: f32, cooldown: f32, projectile_speed: f32| Weapon {
+        range,
+        damage,
+        cooldown,
+        timer: 0.0,
+        projectile_speed,
+        rocket: false,
+        splash: 0.0,
+        arc: 0.0,
+    };
     let (hp, speed, radius, weapon) = match kind {
         UnitKind::Sammler => (160.0, 7.0, 1.3, None),
-        UnitKind::Panzer => (
-            220.0,
-            6.0,
-            1.4,
-            Some(Weapon { range: 11.0, damage: 18.0, cooldown: 1.1, timer: 0.0, projectile_speed: 38.0, rocket: false }),
-        ),
-        UnitKind::Werfer => (
-            140.0,
-            4.8,
-            1.3,
-            Some(Weapon { range: 19.0, damage: 34.0, cooldown: 2.4, timer: 0.0, projectile_speed: 20.0, rocket: true }),
-        ),
+        UnitKind::Panzer => (220.0, 6.0, 1.4, Some(gun(11.0, 18.0, 1.1, 38.0))),
+        UnitKind::Werfer => (140.0, 4.8, 1.3, Some(Weapon { rocket: true, ..gun(19.0, 34.0, 2.4, 20.0) })),
+        UnitKind::Spaeher => (110.0, 10.0, 1.3, Some(gun(12.0, 6.0, 0.3, 60.0))),
+        UnitKind::Bollwerk => (520.0, 4.0, 1.9, Some(gun(13.0, 48.0, 2.0, 40.0))),
+        UnitKind::Haubitze => (150.0, 4.2, 1.5, Some(Weapon { splash: 3.5, arc: 0.28, ..gun(27.0, 42.0, 4.5, 22.0) })),
     };
     let facing = if team == PLAYER { Vec3::new(1.0, 0.0, -1.0) } else { Vec3::new(-1.0, 0.0, 1.0) };
     let heading = Heading::from_dir(facing);
@@ -182,9 +185,8 @@ pub fn spawn_unit(commands: &mut Commands, kit: &ModelKit, team: Team, kind: Uni
             cargo_kind: ResKind::Ferrit,
         });
     }
+    e.insert(Motion { prev: pos, ..default() });
     let id = e.id();
-    if let Some(turret) = models::build_unit(commands, kit, id, team, kind) {
-        commands.entity(id).insert(TurretRef(turret));
-    }
+    models::build_unit(commands, kit, id, team, kind);
     id
 }

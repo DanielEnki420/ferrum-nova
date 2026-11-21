@@ -34,6 +34,8 @@ const PANEL: Color = Color::srgba(0.05, 0.07, 0.10, 0.88);
 const BTN: Color = Color::srgb(0.14, 0.20, 0.28);
 const BTN_HOVER: Color = Color::srgb(0.20, 0.30, 0.42);
 const BTN_PRESS: Color = Color::srgb(0.30, 0.55, 0.45);
+/// Gesperrt: braucht erst eine Fabrik
+const BTN_LOCKED: Color = Color::srgb(0.10, 0.11, 0.13);
 
 fn label(text: impl Into<String>, size: f32) -> impl Bundle {
     (
@@ -51,7 +53,7 @@ fn build_button(item: BuildItem, key: &str) -> impl Bundle {
         BuildItem::Unit(k) => (k.short_name(), k.cost()),
         BuildItem::Structure(k) => (k.short_name(), k.cost()),
     };
-    let text = format!("[{key}] {name}\n{} F / {} P", c[0], c[1]);
+    let text = format!("[{key}] {name}\n{}F / {}P", c[0], c[1]);
     let border = match item {
         BuildItem::Unit(_) => Color::srgb(0.35, 0.5, 0.65),
         BuildItem::Structure(_) => Color::srgb(0.65, 0.55, 0.3),
@@ -60,11 +62,11 @@ fn build_button(item: BuildItem, key: &str) -> impl Bundle {
         BuildButton(item),
         RelativeCursorPosition::default(),
         Node {
-            width: px(118),
+            width: px(96),
             flex_shrink: 0.0,
             height: px(56),
             padding: UiRect::all(px(6)),
-            margin: UiRect::right(px(6)),
+            margin: UiRect::right(px(5)),
             border: UiRect::all(px(1)),
             border_radius: BorderRadius::all(px(6)),
             justify_content: JustifyContent::Center,
@@ -73,7 +75,7 @@ fn build_button(item: BuildItem, key: &str) -> impl Bundle {
         },
         BorderColor::all(border),
         BackgroundColor(BTN),
-        children![label(text, 13.0)],
+        children![label(text, 12.0)],
     )
 }
 
@@ -113,12 +115,15 @@ pub fn setup_hud(mut commands: Commands) {
         },
         BackgroundColor(PANEL),
         children![
-            build_button(BuildItem::Unit(UnitKind::Sammler), "1"),
-            build_button(BuildItem::Unit(UnitKind::Panzer), "2"),
-            build_button(BuildItem::Unit(UnitKind::Werfer), "3"),
-            build_button(BuildItem::Structure(BuildingKind::Geschuetzturm), "4"),
-            build_button(BuildItem::Structure(BuildingKind::Raffinerie), "5"),
-            build_button(BuildItem::Structure(BuildingKind::Fabrik), "6"),
+            build_button(BuildItem::Unit(UnitKind::ALL[0]), "1"),
+            build_button(BuildItem::Unit(UnitKind::ALL[1]), "2"),
+            build_button(BuildItem::Unit(UnitKind::ALL[2]), "3"),
+            build_button(BuildItem::Unit(UnitKind::ALL[3]), "4"),
+            build_button(BuildItem::Unit(UnitKind::ALL[4]), "5"),
+            build_button(BuildItem::Unit(UnitKind::ALL[5]), "6"),
+            build_button(BuildItem::Structure(BuildingKind::Geschuetzturm), "7"),
+            build_button(BuildItem::Structure(BuildingKind::Raffinerie), "8"),
+            build_button(BuildItem::Structure(BuildingKind::Fabrik), "9"),
             (
                 Node {
                     flex_direction: FlexDirection::Column,
@@ -160,6 +165,7 @@ pub fn setup_hud(mut commands: Commands) {
 pub fn build_buttons(
     mut clicks: MessageReader<MouseButtonInput>,
     mouse: Res<ButtonInput<MouseButton>>,
+    factories: Query<(&Team, &Structure), Without<Construction>>,
     mut q: Query<(&BuildButton, &RelativeCursorPosition, &mut BackgroundColor)>,
     mut w: MessageWriter<BuildRequest>,
     mut placing: ResMut<Placing>,
@@ -180,7 +186,10 @@ pub fn build_buttons(
             }
         }
         let active = matches!(btn.0, BuildItem::Structure(k) if placing.kind == Some(k));
-        *bg = if active || (over && (pressed_now || mouse.pressed(MouseButton::Left))) {
+        let locked = matches!(btn.0, BuildItem::Unit(k) if k.needs_factory() && !crate::units::has_factory(&factories, PLAYER));
+        *bg = if locked {
+            BTN_LOCKED
+        } else if active || (over && (pressed_now || mouse.pressed(MouseButton::Left))) {
             BTN_PRESS
         } else if over {
             BTN_HOVER
@@ -192,11 +201,8 @@ pub fn build_buttons(
 }
 
 pub fn build_hotkeys(keys: Res<ButtonInput<KeyCode>>, mut w: MessageWriter<BuildRequest>) {
-    for (k, kind) in [
-        (KeyCode::Digit1, UnitKind::Sammler),
-        (KeyCode::Digit2, UnitKind::Panzer),
-        (KeyCode::Digit3, UnitKind::Werfer),
-    ] {
+    let keys_list = [KeyCode::Digit1, KeyCode::Digit2, KeyCode::Digit3, KeyCode::Digit4, KeyCode::Digit5, KeyCode::Digit6];
+    for (k, kind) in keys_list.into_iter().zip(UnitKind::ALL) {
         if keys.just_pressed(k) {
             w.write(BuildRequest { team: PLAYER, kind });
         }
@@ -246,10 +252,10 @@ pub fn update_hud(
     if let Ok(mut t) = texts.p1().single_mut() {
         **t = queue;
     }
-    let mut counts = [0; 3];
+    let mut counts = [0; 6];
     for (team, u, sel) in &units {
         if sel && *team == PLAYER {
-            counts[u.kind as usize] += 1;
+            counts[u.kind.idx()] += 1;
         }
     }
     let sel_text = if let Some(k) = placing.kind {
@@ -257,10 +263,12 @@ pub fn update_hud(
     } else if counts.iter().sum::<i32>() == 0 {
         "Links: auswaehlen | F: alle Kampfeinheiten | Rechts: bewegen/angreifen/abbauen | Strg+Rechts: Angriffsmarsch".to_string()
     } else {
-        format!(
-            "Auswahl: {} Sammler, {} Panzer, {} Werfer",
-            counts[0], counts[1], counts[2]
-        )
+        let parts: Vec<String> = UnitKind::ALL
+            .iter()
+            .filter(|k| counts[k.idx()] > 0)
+            .map(|k| format!("{} {}", counts[k.idx()], k.short_name()))
+            .collect();
+        format!("Auswahl: {}", parts.join(", "))
     };
     if let Ok(mut t) = texts.p2().single_mut() {
         **t = sel_text;

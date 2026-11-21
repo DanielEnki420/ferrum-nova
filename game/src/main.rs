@@ -19,6 +19,8 @@ mod units;
 mod vegetation;
 mod vehicles;
 mod world;
+#[cfg(test)]
+mod sim_tests;
 
 use bevy::prelude::*;
 use components::*;
@@ -78,6 +80,7 @@ fn main() {
                 units::combat,
                 units::movement,
                 units::separation,
+                units::vehicle_motion,
                 units::ground_snap,
                 units::turret_aim,
                 construction::structure_aim,
@@ -101,6 +104,8 @@ fn main() {
                 fx::spawn_effects,
                 fx::update_fx,
                 fx::update_wrecks,
+                units::spin_wheels,
+                units::vehicle_visuals,
                 models::pulse_lights,
                 buildings::spin,
                 resources::shrink_nodes,

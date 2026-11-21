@@ -21,9 +21,11 @@ pub struct ModelKit {
     pub plasma_core: Handle<StandardMaterial>,
     pub plasma_crystal: Handle<StandardMaterial>,
     /// Detailmodelle je Typ (Sammler, Panzer, Werfer) und Team
-    pub vehicles: [[VehicleMeshes; 2]; 3],
+    pub vehicles: [[VehicleMeshes; 2]; 6],
     /// Fahrzeuglack: Farbe kommt aus den Vertexfarben
     pub vehicle_mat: Handle<StandardMaterial>,
+    /// Lack bei schweren Schäden: verrußt und stumpf
+    pub vehicle_mat_damaged: Handle<StandardMaterial>,
     pub hq: [HqMeshes; 2],
     /// Beton und Bauteile der Gebäude (Farbe aus den Vertexfarben)
     pub building_mat: Handle<StandardMaterial>,
@@ -90,11 +92,21 @@ impl ModelKit {
                 [vehicles::build_sammler(PLAYER, meshes), vehicles::build_sammler(ENEMY, meshes)],
                 [vehicles::build_panzer(PLAYER, meshes), vehicles::build_panzer(ENEMY, meshes)],
                 [vehicles::build_werfer(PLAYER, meshes), vehicles::build_werfer(ENEMY, meshes)],
+                [vehicles::build_spaeher(PLAYER, meshes), vehicles::build_spaeher(ENEMY, meshes)],
+                [vehicles::build_bollwerk(PLAYER, meshes), vehicles::build_bollwerk(ENEMY, meshes)],
+                [vehicles::build_haubitze(PLAYER, meshes), vehicles::build_haubitze(ENEMY, meshes)],
             ],
             vehicle_mat: mats.add(StandardMaterial {
                 perceptual_roughness: 0.58,
                 metallic: 0.22,
                 reflectance: 0.45,
+                ..default()
+            }),
+            vehicle_mat_damaged: mats.add(StandardMaterial {
+                base_color: Color::srgb(0.42, 0.38, 0.35),
+                perceptual_roughness: 0.92,
+                metallic: 0.1,
+                reflectance: 0.2,
                 ..default()
             }),
             hq: [buildings::build_hq(PLAYER, meshes), buildings::build_hq(ENEMY, meshes)],
@@ -167,34 +179,41 @@ fn part(
 }
 
 
-/// Baut das Modell an `root` und gibt den Turm (falls vorhanden) zurück
-pub fn build_unit(c: &mut Commands, k: &ModelKit, root: Entity, team: Team, kind: UnitKind) -> Option<Entity> {
+/// Baut das Modell an `root` und hängt Verweise auf Turm, Lackteile und Ladung an
+pub fn build_unit(c: &mut Commands, k: &ModelKit, root: Entity, team: Team, kind: UnitKind) {
     let t = team.0 as usize;
-    let (vm, turret_base) = match kind {
-        UnitKind::Sammler => (&k.vehicles[0][t], None),
-        UnitKind::Panzer => (&k.vehicles[1][t], Some(Turret { tilt: 0.0, base_y: 0.86, base_z: 0.1 })),
-        UnitKind::Werfer => (&k.vehicles[2][t], Some(Turret { tilt: 0.35, base_y: 1.05, base_z: 0.25 })),
-    };
-    part(c, root, &vm.hull, &k.vehicle_mat, Transform::default());
+    let vm = &k.vehicles[kind.idx()][t];
+    let mut paint = vec![part(c, root, &vm.hull, &k.vehicle_mat, Transform::default())];
     if let Some(m) = &vm.hull_glow {
         part(c, root, m, &k.glow[t], Transform::default());
     }
     if let Some(m) = &vm.glass {
         part(c, root, m, &k.glass, Transform::default());
     }
-    let turret = turret_base?;
-    let pivot = c
-        .spawn((Transform::from_xyz(0.0, turret.base_y, turret.base_z), Visibility::default(), turret))
-        .id();
-    c.entity(root).add_child(pivot);
-    if let Some(m) = &vm.turret {
-        part(c, pivot, m, &k.vehicle_mat, Transform::default());
+    for (m, pos, r) in &vm.wheels {
+        let w = part(c, root, m, &k.vehicle_mat, Transform::from_translation(*pos));
+        c.entity(w).insert(Wheel { radius: *r });
     }
-    if let Some(m) = &vm.turret_glow {
-        let mat = if kind == UnitKind::Werfer { &k.rocket_mat[t] } else { &k.glow[t] };
-        part(c, pivot, m, mat, Transform::default());
+    if let Some((m, pos)) = &vm.cargo {
+        let cargo = part(c, root, m, &k.vehicle_mat, Transform::from_translation(*pos).with_scale(Vec3::splat(0.01)));
+        c.entity(cargo).insert(Visibility::Hidden);
+        c.entity(root).insert(CargoRef(cargo));
     }
-    Some(pivot)
+    if let Some(mount) = kind.mount() {
+        let turret = Turret::from(mount);
+        let pivot = c
+            .spawn((Transform::from_xyz(0.0, turret.base_y, turret.base_z), Visibility::default(), turret))
+            .id();
+        c.entity(root).add_child(pivot).insert(TurretRef(pivot));
+        if let Some(m) = &vm.turret {
+            paint.push(part(c, pivot, m, &k.vehicle_mat, Transform::default()));
+        }
+        if let Some(m) = &vm.turret_glow {
+            let mat = if kind == UnitKind::Werfer { &k.rocket_mat[t] } else { &k.glow[t] };
+            part(c, pivot, m, mat, Transform::default());
+        }
+    }
+    c.entity(root).insert(PaintParts(paint));
 }
 
 /// Hauptquartier

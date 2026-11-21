@@ -88,10 +88,10 @@ pub fn combat(
     snap: Res<Snapshot>,
     kit: Res<ModelKit>,
     mut fx: MessageWriter<FxEvent>,
-    mut q: Query<(Entity, &mut Weapon, &AttackTarget, &Team, &Transform, Option<&Unit>), Without<Construction>>,
+    mut q: Query<(Entity, &mut Weapon, &AttackTarget, &Team, &Transform, Option<&Unit>, Option<&mut Motion>), Without<Construction>>,
 ) {
     let dt = time.delta_secs();
-    for (e, mut w, target, team, t, unit) in &mut q {
+    for (e, mut w, target, team, t, unit, motion) in &mut q {
         w.timer = (w.timer - dt).max(0.0);
         let Some(tgt) = snap.0.get(&target.0) else {
             commands.entity(e).remove::<AttackTarget>();
@@ -109,13 +109,13 @@ pub fn combat(
         }
         w.timer = w.cooldown;
         let dir = to.normalize_or_zero();
-        let (muzzle_len, muzzle_h) = match unit.map(|u| u.kind) {
-            Some(UnitKind::Werfer) => (1.0, 1.5),
-            Some(_) => (2.2, 1.05),
-            None => (3.2, 2.1),
-        };
+        let (muzzle_len, muzzle_h) = unit.map_or((3.2, 2.1), |u| u.kind.muzzle());
+        if let Some(mut m) = motion {
+            m.recoil = 1.0;
+        }
         let from = t.translation + Vec3::Y * muzzle_h + dir * muzzle_len;
-        let vel = (aim_point(tgt) - from).normalize_or_zero();
+        let aim = aim_point(tgt);
+        let vel = (aim - from).normalize_or_zero();
         let t_idx = team.0 as usize;
         let (mat, scale) = if w.rocket {
             (kit.rocket_mat[t_idx].clone(), Vec3::new(2.4, 0.8, 2.4))
@@ -135,6 +135,12 @@ pub fn combat(
                 speed: w.projectile_speed,
                 rocket: w.rocket,
                 smoke_timer: 0.0,
+                team: *team,
+                splash: w.splash,
+                arc: w.arc,
+                base: from,
+                traveled: 0.0,
+                total: from.distance(aim).max(1.0),
             },
         ));
         if !w.rocket {
@@ -220,13 +226,15 @@ pub fn separation(snap: Res<Snapshot>, mut q: Query<(Entity, &Unit, &mut Transfo
 }
 
 /// Fahrzeuge folgen dem Gelände: Höhe und Neigung
-pub fn ground_snap(time: Res<Time>, mut q: Query<(&mut Transform, &Heading), With<Unit>>) {
+pub fn ground_snap(time: Res<Time>, mut q: Query<(&mut Transform, &Heading, &Motion), With<Unit>>) {
     let k = (10.0 * time.delta_secs()).min(1.0);
-    for (mut t, heading) in &mut q {
+    for (mut t, heading, motion) in &mut q {
         let (x, z) = (t.translation.x, t.translation.z);
         t.translation.y = terrain::height(x, z);
         let n = terrain::normal(x, z);
-        let target = Quat::from_rotation_arc(Vec3::Y, n) * Quat::from_rotation_y(heading.0);
+        // Federung: beim Schuss hebt sich der Bug kurz, beim Anfahren senkt sich das Heck
+        let pitch = motion.recoil * motion.recoil * 0.05 + (motion.speed * 0.006).clamp(-0.03, 0.03);
+        let target = Quat::from_rotation_arc(Vec3::Y, n) * Quat::from_rotation_y(heading.0) * Quat::from_rotation_x(pitch);
         t.rotation = t.rotation.slerp(target, k);
     }
 }
@@ -235,11 +243,11 @@ pub fn ground_snap(time: Res<Time>, mut q: Query<(&mut Transform, &Heading), Wit
 pub fn turret_aim(
     time: Res<Time>,
     snap: Res<Snapshot>,
-    units: Query<(&Transform, &Heading, &TurretRef, Option<&AttackTarget>), With<Unit>>,
+    units: Query<(&Transform, &Heading, &TurretRef, Option<&AttackTarget>, &Motion), With<Unit>>,
     mut turrets: Query<(&mut Transform, &Turret), Without<Unit>>,
 ) {
     let dt = time.delta_secs();
-    for (t, heading, tref, atk) in &units {
+    for (t, heading, tref, atk, motion) in &units {
         let Ok((mut tt, turret)) = turrets.get_mut(tref.0) else { continue };
         let mut local = 0.0;
         if let Some(tgt) = atk.and_then(|a| snap.0.get(&a.0)) {
@@ -250,8 +258,10 @@ pub fn turret_aim(
         }
         let (cur, _, _) = tt.rotation.to_euler(EulerRot::YXZ);
         let next = cur + angle_diff(cur, local).clamp(-2.5 * dt, 2.5 * dt);
-        tt.rotation = Quat::from_euler(EulerRot::YXZ, next, turret.tilt, 0.0);
-        tt.translation = Vec3::new(0.0, turret.base_y, turret.base_z);
+        // Rückstoß: Aufbau ruckt nach hinten und kippt kurz nach oben
+        let r = motion.recoil * motion.recoil;
+        tt.rotation = Quat::from_euler(EulerRot::YXZ, next, turret.tilt + r * 0.06, 0.0);
+        tt.translation = Vec3::new(0.0, turret.base_y, turret.base_z) + Quat::from_rotation_y(next) * Vec3::Z * r * 0.16;
     }
 }
 
@@ -375,25 +385,48 @@ pub fn projectiles(
             continue;
         };
         let aim = aim_point(tgt);
-        let to = aim - t.translation;
+        let to = aim - p.base;
         let d = to.length();
         let step = p.speed * dt;
         if d <= step + tgt.radius * 0.4 {
-            if let Ok(mut h) = health.get_mut(p.target) {
+            if p.splash > 0.0 {
+                // Flächenschaden: alle Gegner im Umkreis, nach außen schwächer
+                for (oe, o) in &snap.0 {
+                    if o.team == p.team {
+                        continue;
+                    }
+                    let dist = (flat(o.pos) - flat(p.base)).length() - o.radius * 0.5;
+                    if dist < p.splash
+                        && let Ok(mut h) = health.get_mut(*oe)
+                    {
+                        h.hp -= p.damage * (1.0 - (dist.max(0.0) / p.splash) * 0.6);
+                    }
+                }
+            } else if let Ok(mut h) = health.get_mut(p.target) {
                 h.hp -= p.damage;
             }
-            fx.write(FxEvent::Impact { pos: t.translation, rocket: p.rocket });
+            fx.write(FxEvent::Impact { pos: p.base, rocket: p.rocket || p.splash > 0.0 });
             commands.entity(e).try_despawn();
             continue;
         }
         let dir = to / d;
-        t.translation += dir * step;
-        t.rotation = Quat::from_rotation_arc(Vec3::Y, dir);
-        if p.rocket {
+        p.base += dir * step;
+        p.traveled += step;
+        // Bogenschuss: Höhe über der geraden Bahn als Parabel
+        let f = (p.traveled / p.total).clamp(0.0, 1.0);
+        let lift = p.arc * p.total * 4.0 * f * (1.0 - f);
+        let slope = p.arc * 4.0 * (1.0 - 2.0 * f);
+        let prev = t.translation;
+        t.translation = p.base + Vec3::Y * lift;
+        let heading = (dir + Vec3::Y * slope).normalize_or_zero();
+        if (t.translation - prev).length_squared() > 1e-6 {
+            t.rotation = Quat::from_rotation_arc(Vec3::Y, heading);
+        }
+        if p.rocket || p.arc > 0.0 {
             p.smoke_timer -= dt;
             if p.smoke_timer <= 0.0 {
-                p.smoke_timer = 0.05;
-                fx.write(FxEvent::Trail(t.translation - dir * 0.6));
+                p.smoke_timer = if p.rocket { 0.05 } else { 0.08 };
+                fx.write(FxEvent::Trail(t.translation - heading * 0.6));
             }
         }
     }
@@ -436,12 +469,20 @@ pub struct BuildRequest {
 
 pub const MAX_QUEUE: usize = 5;
 
+pub fn has_factory(q: &Query<(&Team, &Structure), Without<Construction>>, team: Team) -> bool {
+    q.iter().any(|(t, s)| *t == team && s.0 == BuildingKind::Fabrik)
+}
+
 pub fn enqueue_builds(
     mut reqs: MessageReader<BuildRequest>,
     mut stock: ResMut<Stock>,
     mut hqs: Query<(&Team, &mut Hq)>,
+    factories: Query<(&Team, &Structure), Without<Construction>>,
 ) {
     for r in reqs.read() {
+        if r.kind.needs_factory() && !has_factory(&factories, r.team) {
+            continue;
+        }
         for (team, mut hq) in &mut hqs {
             if *team != r.team || hq.queue.len() >= MAX_QUEUE {
                 continue;
@@ -482,6 +523,102 @@ pub fn production(
             let e = spawn_unit(&mut commands, &kit, *team, kind, spawn);
             if kind != UnitKind::Sammler {
                 commands.entity(e).insert(MoveTo(spawn + dir * 6.0));
+            }
+        }
+    }
+}
+
+/// Fahrdaten fortschreiben: Strecke, Tempo, Rückstoß. Dazu Staubfahne und Fahrspuren.
+pub fn vehicle_motion(
+    time: Res<Time>,
+    mut rng: ResMut<Rng>,
+    mut q: Query<(&Transform, &Unit, &mut Motion)>,
+    mut fx: MessageWriter<FxEvent>,
+) {
+    let dt = time.delta_secs();
+    if dt <= 0.0 {
+        return;
+    }
+    for (t, unit, mut m) in &mut q {
+        let delta = flat(t.translation - m.prev);
+        m.prev = t.translation;
+        // Sprünge (Spawn, Wegschieben) nicht als Fahrt werten
+        if delta.length() > 2.0 {
+            continue;
+        }
+        let fwd = flat(t.rotation * Vec3::NEG_Z).normalize_or_zero();
+        let signed = delta.dot(fwd);
+        m.dist += signed;
+        m.speed += (signed / dt - m.speed) * (6.0 * dt).min(1.0);
+        m.recoil *= (-5.0 * dt).exp();
+        if m.speed.abs() < 0.8 {
+            continue;
+        }
+        let back = t.translation - fwd * 1.3;
+        m.dust_t -= dt;
+        if m.dust_t <= 0.0 {
+            m.dust_t = 0.22 - (m.speed.abs() * 0.01).min(0.1);
+            let side = Vec3::new(fwd.z, 0.0, -fwd.x) * unit.kind.gauge() * if rng.next_f32() < 0.5 { 1.0 } else { -1.0 };
+            fx.write(FxEvent::Dust { pos: back + side + Vec3::Y * 0.2, size: 0.5 + m.speed.abs() * 0.08 });
+        }
+        m.track_d -= signed.abs();
+        if m.track_d <= 0.0 {
+            m.track_d = 1.4;
+            let rot = Quat::from_rotation_y(f32::atan2(-fwd.x, -fwd.z));
+            fx.write(FxEvent::Track { pos: t.translation, rot, width: unit.kind.gauge() * 2.6 });
+        }
+    }
+}
+
+/// Räder, Antriebs- und Leiträder drehen sich passend zur gefahrenen Strecke
+pub fn spin_wheels(motion: Query<&Motion>, mut wheels: Query<(&Wheel, &ChildOf, &mut Transform)>) {
+    for (w, parent, mut t) in &mut wheels {
+        if let Ok(m) = motion.get(parent.parent()) {
+            t.rotation = Quat::from_rotation_x(-m.dist / w.radius);
+        }
+    }
+}
+
+/// Ladung im Sammler, verrußter Lack bei schweren Schäden, Staub beim Abbauen
+pub fn vehicle_visuals(
+    time: Res<Time>,
+    kit: Res<ModelKit>,
+    mut timer: Local<f32>,
+    harvesters: Query<(&Harvester, &CargoRef, &Transform)>,
+    damaged: Query<(&Health, &PaintParts), Changed<Health>>,
+    mut parts: Query<(&mut Transform, &mut Visibility), Without<Harvester>>,
+    mut mats: Query<&mut MeshMaterial3d<StandardMaterial>>,
+    mut fx: MessageWriter<FxEvent>,
+) {
+    *timer -= time.delta_secs();
+    let puff = *timer <= 0.0;
+    if puff {
+        *timer = 0.3;
+    }
+    for (h, cargo, t) in &harvesters {
+        let fill = match h.state {
+            HarvestState::Mining(e) => {
+                if puff {
+                    fx.write(FxEvent::Dust { pos: t.translation + t.rotation * Vec3::new(0.6, 0.3, 1.8), size: 0.9 });
+                }
+                (e / HARVEST_TIME).clamp(0.0, 1.0)
+            }
+            _ => h.cargo as f32 / HARVEST_LOAD as f32,
+        };
+        if let Ok((mut ct, mut vis)) = parts.get_mut(cargo.0) {
+            *vis = if fill > 0.02 { Visibility::Inherited } else { Visibility::Hidden };
+            let xz = 0.75 + 0.25 * fill;
+            ct.scale = Vec3::new(xz, fill.max(0.01), xz);
+            ct.translation.y = 0.67 + 0.31 * fill;
+        }
+    }
+    for (hp, paint) in &damaged {
+        let mat = if hp.hp / hp.max < 0.4 { &kit.vehicle_mat_damaged } else { &kit.vehicle_mat };
+        for e in &paint.0 {
+            if let Ok(mut m) = mats.get_mut(*e)
+                && m.0 != *mat
+            {
+                m.0 = mat.clone();
             }
         }
     }
