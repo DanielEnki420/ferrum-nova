@@ -3,6 +3,7 @@
 use crate::components::*;
 use crate::hud::{SelCard, BOTTOM_PANEL_H, TOP_BAR_H};
 use crate::minimap::minimap_rect;
+use crate::net::cmd::Cmd;
 use crate::orders::*;
 use crate::terrain;
 use bevy::core_pipeline::tonemapping::Tonemapping;
@@ -26,8 +27,9 @@ pub struct CamRig {
     pub yaw: f32,
 }
 
+/// Blick auf die eigene Basis (im Duell für den Gast die gegenüberliegende)
 pub fn base_focus() -> Vec3 {
-    PLAYER_HQ_POS + Vec3::new(10.0, 0.0, -10.0)
+    if crate::net::me() == PLAYER { PLAYER_HQ_POS + Vec3::new(10.0, 0.0, -10.0) } else { ENEMY_HQ_POS + Vec3::new(-10.0, 0.0, 10.0) }
 }
 
 impl Default for CamRig {
@@ -370,7 +372,7 @@ pub fn mouse_commands(
     buildings: Query<(Entity, &GlobalTransform, &Team, &Building, Has<Hq>, Has<Selected>), (Without<Unit>, Without<Construction>)>,
     targets: Query<(Entity, &GlobalTransform, &Team, Option<&Unit>, Option<&Building>), (With<Health>, Without<Fogged>)>,
     nodes: Query<(Entity, &GlobalTransform), With<ResourceNode>>,
-    mut harvesters: Query<&mut Harvester>,
+    (ids, mut outbox): (Query<&NetId>, ResMut<crate::net::cmd::Outbox>),
     (mut sel_box, panel): (Query<(&mut Node, &mut Visibility), With<SelectionBox>>, Query<&RelativeCursorPosition, With<SelCard>>),
     ui_scale: Res<UiScale>,
     mut placing: ResMut<crate::construction::Placing>,
@@ -392,6 +394,7 @@ pub fn mouse_commands(
         return;
     }
     let (shift, ctrl, alt) = modifiers(&keys);
+    let me = crate::net::me();
     // ein schneller Doppelklick kann ganz in einen Frame fallen
     let left_presses = clicks.read().filter(|c| c.button == MouseButton::Left && c.state == ButtonState::Pressed).count();
     let on_panel = panel.iter().any(|p| p.cursor_over());
@@ -410,7 +413,7 @@ pub fn mouse_commands(
     };
     // Einknopf-Modus: ein Klick ins Leere wird zum Befehl, wenn etwas Eigenes ausgewählt ist
     let left_mode = mode.left_commands;
-    let has_selection = units.iter().any(|u| u.4 && *u.2 == PLAYER) || buildings.iter().any(|b| b.5 && b.4 && *b.2 == PLAYER);
+    let has_selection = units.iter().any(|u| u.4 && *u.2 == me) || buildings.iter().any(|b| b.5 && b.4 && *b.2 == me);
     let mut command_at: Option<(Vec2, Vec3)> = None;
     let deselect_buildings = |commands: &mut Commands| {
         for (e, _, _, _, _, sel) in &buildings {
@@ -455,7 +458,7 @@ pub fn mouse_commands(
                 let min = start.min(c);
                 let max = start.max(c);
                 for (e, gt, team, _, _, _, _) in &units {
-                    if *team != PLAYER {
+                    if *team != me {
                         continue;
                     }
                     if let Ok(p) = camera.world_to_viewport(cam_t, gt.translation())
@@ -476,14 +479,14 @@ pub fn mouse_commands(
                     camera,
                     cam_t,
                     c,
-                    units.iter().filter(|u| *u.2 == PLAYER).map(|(e, gt, _, u, _, _, _)| (e, gt.translation(), u.radius)),
+                    units.iter().filter(|u| *u.2 == me).map(|(e, gt, _, u, _, _, _)| (e, gt.translation(), u.radius)),
                 );
                 let building_hit = || {
                     pick(
                         camera,
                         cam_t,
                         c,
-                        buildings.iter().filter(|b| *b.2 == PLAYER).map(|(e, gt, _, b, _, _)| (e, gt.translation(), b.radius * 0.8)),
+                        buildings.iter().filter(|b| *b.2 == me).map(|(e, gt, _, b, _, _)| (e, gt.translation(), b.radius * 0.8)),
                     )
                 };
                 let now = time.elapsed_secs_f64();
@@ -499,7 +502,7 @@ pub fn mouse_commands(
                             deselect_all(&mut commands);
                         }
                         for (oe, gt, team, u, _, _, _) in &units {
-                            if *team == PLAYER
+                            if *team == me
                                 && Some(u.kind) == kind
                                 && let Ok(p) = camera.world_to_viewport(cam_t, gt.translation())
                                 && !over_ui(win, p, ui_scale.0)
@@ -570,9 +573,10 @@ pub fn mouse_commands(
 
     let members: Vec<Member> = units
         .iter()
-        .filter(|u| u.4 && *u.2 == PLAYER)
+        .filter(|u| u.4 && *u.2 == me)
         .map(|(e, gt, _, u, _, armed, harvester)| Member { e, pos: gt.translation(), speed: u.speed, radius: u.radius, armed, harvester })
         .collect();
+    let id_list = |list: &mut dyn Iterator<Item = &Member>| -> Vec<NetId> { list.filter_map(|m| ids.get(m.e).ok().copied()).collect() };
 
     // Ressourcenfeld unter dem Cursor?
     let node = nodes.iter().find(|(_, gt)| flat(gt.translation()).distance(flat(gp)) < 3.5).map(|(e, _)| e);
@@ -580,9 +584,11 @@ pub fn mouse_commands(
     if members.is_empty() {
         // HQ ausgewählt: Sammelpunkt für neue Einheiten setzen
         for (e, _, team, _, hq, sel) in &buildings {
-            if sel && hq && *team == PLAYER {
+            if sel && hq && *team == me
+                && let Ok(hq_id) = ids.get(e)
+            {
                 let pos = node.and_then(|n| nodes.get(n).ok()).map_or(gp, |(_, gt)| gt.translation());
-                commands.entity(e).insert(Rally { pos, node });
+                outbox.push(Cmd::Rally { hq: *hq_id, pos, node: node.and_then(|n| ids.get(n).ok().copied()) });
                 spawn_marker(&mut commands, MarkerKind::Rally, pos, None);
             }
         }
@@ -596,21 +602,12 @@ pub fn mouse_commands(
     } else {
         MoveKind::Move
     };
-    let reset_harvesters = |harvesters: &mut Query<&mut Harvester>, list: &[Member]| {
-        for m in list.iter().filter(|m| m.harvester) {
-            if let Ok(mut h) = harvesters.get_mut(m.e) {
-                h.state = HarvestState::Idle;
-                h.node = None;
-            }
-        }
-    };
 
     // Gezogene Frontlinie
     if flat(end - gp).length() > LINE_MIN {
-        issue_group_move(&mut commands, &members, (gp + end) * 0.5, Some((gp, end)), kind, shift);
-        if kind == MoveKind::Move && !shift {
-            reset_harvesters(&mut harvesters, &members);
-        }
+        let line = Some((gp, end));
+        outbox.push(Cmd::Move { units: id_list(&mut members.iter()), target: (gp + end) * 0.5, line, kind, queue: shift });
+        group_marker(&mut commands, gp, line, kind);
         return;
     }
 
@@ -619,19 +616,16 @@ pub fn mouse_commands(
         camera,
         cam_t,
         c,
-        targets.iter().filter(|t| *t.2 != PLAYER).map(|(e, gt, _, u, b)| {
+        targets.iter().filter(|t| *t.2 != me).map(|(e, gt, _, u, b)| {
             let r = u.map(|u| u.radius).or(b.map(|b| b.radius)).unwrap_or(1.0);
             (e, gt.translation(), r)
         }),
     );
     if let Some(target) = enemy
         && members.iter().any(|m| m.armed)
+        && let Ok(target_id) = ids.get(target)
     {
-        for m in members.iter().filter(|m| m.armed) {
-            let mut ec = commands.entity(m.e);
-            clear_orders(&mut ec);
-            ec.insert(AttackTarget(target));
-        }
+        outbox.push(Cmd::Attack { units: id_list(&mut members.iter().filter(|m| m.armed)), target: *target_id });
         spawn_marker(&mut commands, MarkerKind::Attack, gp, Some(target));
         return;
     }
@@ -639,43 +633,38 @@ pub fn mouse_commands(
     // Sammler auf ein Feld: abbauen; die übrigen fahren hin
     if let Some(node_e) = node
         && members.iter().any(|m| m.harvester)
+        && let Ok(node_id) = ids.get(node_e)
     {
-        for m in members.iter().filter(|m| m.harvester) {
-            if let Ok(mut h) = harvesters.get_mut(m.e) {
-                h.node = Some(node_e);
-                h.state = HarvestState::ToNode;
-            }
-            clear_orders(&mut commands.entity(m.e));
+        outbox.push(Cmd::Harvest { units: id_list(&mut members.iter().filter(|m| m.harvester)), node: *node_id });
+        let rest = id_list(&mut members.iter().filter(|m| !m.harvester));
+        if !rest.is_empty() {
+            outbox.push(Cmd::Move { units: rest, target: gp, line: None, kind, queue: shift });
         }
-        let rest: Vec<Member> = members.iter().copied().filter(|m| !m.harvester).collect();
-        issue_group_move(&mut commands, &rest, gp, None, kind, shift);
         spawn_marker(&mut commands, MarkerKind::Move, gp, None);
         return;
     }
 
-    issue_group_move(&mut commands, &members, gp, None, kind, shift);
-    if kind == MoveKind::Move && !shift {
-        reset_harvesters(&mut harvesters, &members);
-    }
+    outbox.push(Cmd::Move { units: id_list(&mut members.iter()), target: gp, line: None, kind, queue: shift });
+    group_marker(&mut commands, gp, None, kind);
 }
 
 /// R: Stopp, T: Stellung halten
-pub fn order_hotkeys(mut commands: Commands, keys: Res<ButtonInput<KeyCode>>, sel: Query<(Entity, &Team), (With<Selected>, With<Unit>)>) {
+pub fn order_hotkeys(
+    keys: Res<ButtonInput<KeyCode>>,
+    sel: Query<(&NetId, &Team), (With<Selected>, With<Unit>)>,
+    mut outbox: ResMut<crate::net::cmd::Outbox>,
+) {
     let stop = keys.just_pressed(KeyCode::KeyR);
     let hold = keys.just_pressed(KeyCode::KeyT);
     if !stop && !hold {
         return;
     }
-    for (e, team) in &sel {
-        if *team != PLAYER {
-            continue;
-        }
-        let mut ec = commands.entity(e);
-        clear_orders(&mut ec);
-        if hold {
-            ec.insert(HoldPosition);
-        }
+    let me = crate::net::me();
+    let units: Vec<NetId> = sel.iter().filter(|(_, t)| **t == me).map(|(id, _)| *id).collect();
+    if units.is_empty() {
+        return;
     }
+    outbox.push(if hold { Cmd::Hold { units } } else { Cmd::Stop { units } });
 }
 
 const GROUP_KEYS: [KeyCode; 9] = [
@@ -705,7 +694,7 @@ pub fn control_groups(
         if !keys.just_pressed(key) {
             continue;
         }
-        let selected: Vec<Entity> = units.iter().filter(|u| u.3 && *u.1 == PLAYER).map(|u| u.0).collect();
+        let selected: Vec<Entity> = units.iter().filter(|u| u.3 && *u.1 == crate::net::me()).map(|u| u.0).collect();
         if ctrl {
             groups.groups[i] = selected;
             continue;
@@ -770,7 +759,7 @@ pub fn hover(
             (e, gt.translation(), r)
         });
         if let Some(e) = pick(camera, cam_t, c, cands) {
-            let own = targets.get(e).is_ok_and(|t| *t.2 == PLAYER);
+            let own = targets.get(e).is_ok_and(|t| *t.2 == crate::net::me());
             hover.0 = Some((e, if own { HoverKind::Own } else { HoverKind::Enemy }));
         } else if let Some(gp) = ground_point(camera, cam_t, c)
             && let Some((e, _)) = nodes.iter().find(|(_, gt)| flat(gt.translation()).distance(flat(gp)) < 3.5)
@@ -778,8 +767,8 @@ pub fn hover(
             hover.0 = Some((e, HoverKind::Node));
         }
     }
-    let armed = selected.iter().any(|s| *s.0 == PLAYER && s.1);
-    let harvester = selected.iter().any(|s| *s.0 == PLAYER && s.2);
+    let armed = selected.iter().any(|s| *s.0 == crate::net::me() && s.1);
+    let harvester = selected.iter().any(|s| *s.0 == crate::net::me() && s.2);
     let icon = if drag.mid.is_some() {
         SystemCursorIcon::Grabbing
     } else {
@@ -822,7 +811,7 @@ pub fn draw_overlays(
                 gizmos.rect(iso, Vec2::splat((r + 0.6) * 2.0), Color::srgb(0.4, 1.0, 0.5));
             }
         } else if hovered {
-            let col = if *team == PLAYER { Color::srgba(1.0, 1.0, 1.0, 0.7) } else { Color::srgba(1.0, 0.3, 0.25, 0.85) };
+            let col = if *team == crate::net::me() { Color::srgba(1.0, 1.0, 1.0, 0.7) } else { Color::srgba(1.0, 0.3, 0.25, 0.85) };
             ring(&mut gizmos, pos, r + 0.3, col);
         }
         let frac = (hp.hp / hp.max).clamp(0.0, 1.0);
@@ -830,7 +819,7 @@ pub fn draw_overlays(
             let height = bld.map_or(2.6, |b| 2.0 + b.radius * 1.3);
             let w = r * 1.6;
             let start = pos + Vec3::Y * height - right * w * 0.5;
-            let col = if *team == PLAYER {
+            let col = if *team == crate::net::me() {
                 Color::srgb(0.3, 1.0, 0.4)
             } else {
                 Color::srgb(1.0, 0.3, 0.3)
@@ -861,7 +850,7 @@ pub fn draw_orders(
     let mut count = 0;
     let mut spacing: f32 = 3.0;
     for (gt, team, mv, amove, wp, patrol, atk, unit) in &sel {
-        if *team != PLAYER {
+        if *team != crate::net::me() {
             continue;
         }
         if let Some(u) = unit {
@@ -896,7 +885,7 @@ pub fn draw_orders(
         }
     }
     for (gt, r, team) in &rally {
-        if *team == PLAYER {
+        if *team == crate::net::me() {
             let col = MarkerKind::Rally.color().with_alpha(0.7);
             let to = lift(r.pos);
             gizmos.line(lift(gt.translation()), to, col);
@@ -931,7 +920,7 @@ pub fn select_army(
         return;
     }
     for (e, team, armed, sel, is_unit) in &units {
-        if *team != PLAYER {
+        if *team != crate::net::me() {
             continue;
         }
         if armed && is_unit {

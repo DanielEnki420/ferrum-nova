@@ -21,8 +21,10 @@ mod input;
 mod minimap;
 mod models;
 mod nav;
+mod net;
 mod orders;
 mod resources;
+mod sim;
 mod sky;
 mod splat;
 mod terrain;
@@ -39,7 +41,8 @@ use components::*;
 
 fn main() {
     let config = frame::MatchConfig::load();
-    App::new()
+    let mut app = App::new();
+    app
         .set_error_handler(bevy::ecs::error::warn)
         .add_plugins(DefaultPlugins.set(WindowPlugin {
             primary_window: Some(Window {
@@ -68,6 +71,11 @@ fn main() {
         .init_resource::<Outcome>()
         .insert_resource(vaar::VaarMemory::load(&config))
         .init_resource::<vaar::VaarObs>()
+        .insert_resource(sim::SimRules { duel: config.duell.is_some() })
+        .insert_resource(match &config.duell {
+            Some((room, key)) => net::Net::duel(room.clone(), key.clone()),
+            None => net::Net::solo(),
+        })
         .insert_resource(config)
         .insert_resource(audio::SoundPrefs::load())
         .add_message::<audio::PlaySfx>()
@@ -95,50 +103,31 @@ fn main() {
         .add_systems(Startup, fog::setup_fog.before(world::setup_world).before(vegetation::setup_vegetation))
         .add_systems(Startup, (world::setup_world, input::setup_camera, hud::setup_hud, hud::setup_perf, minimap::setup_minimap, splat::load_terrain_textures, vegetation::setup_vegetation, atmo::setup_atmo, frame::setup_frame, frame::autostart, audio::setup_audio))
         .add_systems(Startup, (campaign::setup_mission.after(world::setup_world), campaign::setup_mission_hud.after(hud::setup_hud), halkyon::setup_eclipse_hud.after(hud::setup_hud), vaar::setup_vaar_hud.after(hud::setup_hud)))
+        // Eingabe: erzeugt Befehle (net::cmd::Outbox), danach rechnet der Takt die Ticks
         .add_systems(
             Update,
-            ((
-                input::camera_control,
-                construction::placement_input,
-                input::mouse_commands,
-                input::toggle_click_mode,
-                input::order_hotkeys,
-                input::control_groups,
-                input::select_army,
-                hud::build_hotkeys,
-                minimap::minimap_input,
-                ai::enemy_ai,
-                ai::ai_tactics,
-                units::enqueue_builds,
-                construction::place_buildings,
-                construction::construct,
-            )
-                .chain(),
             (
-                units::snapshot,
-                nav::update_grid,
-                units::auto_target,
-                units::combat,
-                orders::follow_orders,
-                nav::plan_paths,
-                units::movement,
-                orders::face_on_arrival,
-                units::separation,
-                units::vehicle_motion,
-                units::ground_snap,
-                units::turret_aim,
-                construction::structure_aim,
-                units::harvest,
-                units::projectiles,
-                units::production,
-                units::repair,
-                (frame::track_stats, units::deaths, units::check_outcome, campaign::mission_tick, orders::tick_alerts).chain(),
-            )
-                .chain(),
+                (
+                    input::camera_control,
+                    construction::placement_input,
+                    input::mouse_commands,
+                    input::toggle_click_mode,
+                    input::order_hotkeys,
+                    input::control_groups,
+                    input::select_army,
+                    hud::build_hotkeys,
+                    minimap::minimap_input,
+                )
+                    .chain()
+                    .run_if(|p: Res<frame::Phase>| *p == frame::Phase::Playing),
+                sim::drive,
             )
                 .chain()
                 .run_if(frame::playing),
         )
+        .add_systems(Update, (net::poll, net::track_stall, sim::update_sight.run_if(|s: Res<sim::SimSight>| !s.ready)))
+        .add_systems(First, sim::interp_restore)
+        .add_systems(PostUpdate, sim::interp_apply.before(bevy::transform::TransformSystems::Propagate))
         .add_systems(
             Update,
             (
@@ -148,8 +137,7 @@ fn main() {
                 orders::draw_markers,
                 hud::build_buttons.run_if(frame::playing),
                 frame::pause_keys.before(construction::placement_input),
-                frame::frame_buttons,
-                frame::update_frame,
+                (frame::frame_buttons, frame::update_frame, frame::duel_flow),
                 frame::menu_camera,
                 campaign::enforce_unlocks,
                 frame::hide_loading,
@@ -164,7 +152,7 @@ fn main() {
                 splat::finish_terrain,
             ),
         )
-        .add_systems(Update, (vaar::observe, vaar::conclude, vaar::taunts).chain().after(units::check_outcome))
+        .add_systems(Update, (vaar::observe, vaar::conclude, vaar::taunts).chain().after(sim::drive).run_if(sim::solo))
         .add_systems(Update, ((era::era_keys, era::apply_era).chain(), (halkyon::update_eclipse, halkyon::eclipse_lights).chain().before(fog::update_fog)))
         // Optik: läuft auch nach Spielende weiter, damit Explosionen ausklingen
         .add_systems(
@@ -191,6 +179,8 @@ fn main() {
                 atmo::update_dust,
             )
                 .chain(),
-        )
-        .run();
+        );
+    sim::add_sim(&mut app);
+    net::connect(&mut app);
+    app.run();
 }

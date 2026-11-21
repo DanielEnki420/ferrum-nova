@@ -4,7 +4,7 @@
 use crate::components::*;
 use crate::hud::BOTTOM_PANEL_H;
 use crate::input::{ground_point, CamRig, MainCamera};
-use crate::orders::{issue_group_move, Alerts, Member, MoveKind};
+use crate::orders::{Alerts, MoveKind};
 use crate::terrain;
 use bevy::asset::RenderAssetUsages;
 use bevy::image::ImageSampler;
@@ -128,6 +128,7 @@ fn line(data: &mut [u8], a: Vec2, b: Vec2, col: [u8; 3]) {
     }
 }
 
+/// Farbe nach Team (Blau = Team 0), passend zu den Modellen
 fn team_color(team: Team, selected: bool) -> [u8; 3] {
     match (team == PLAYER, selected) {
         (true, true) => [190, 255, 200],
@@ -228,7 +229,8 @@ pub fn minimap_input(
     map: Query<&RelativeCursorPosition, With<Minimap>>,
     mut rig: ResMut<CamRig>,
     mut dragging: Local<bool>,
-    units: Query<(Entity, &Transform, &Team, &Unit, Has<Weapon>, Has<Harvester>), With<Selected>>,
+    units: Query<(&NetId, &Team), (With<Selected>, With<Unit>)>,
+    mut outbox: ResMut<crate::net::cmd::Outbox>,
 ) {
     let Ok(rel) = map.single() else { return };
     let mut right_click = false;
@@ -254,11 +256,8 @@ pub fn minimap_input(
         rig.focus.z = p.z.clamp(-lim, lim);
     }
     if right_click {
-        let members: Vec<Member> = units
-            .iter()
-            .filter(|(_, _, t, _, _, _)| **t == PLAYER)
-            .map(|(e, t, _, u, armed, harvester)| Member { e, pos: t.translation, speed: u.speed, radius: u.radius, armed, harvester })
-            .collect();
+        let me = crate::net::me();
+        let ids: Vec<NetId> = units.iter().filter(|(_, t)| **t == me).map(|(id, _)| *id).collect();
         let (queue, ctrl, alt) = crate::input::modifiers(&keys);
         let kind = if alt {
             MoveKind::Patrol
@@ -267,6 +266,10 @@ pub fn minimap_input(
         } else {
             MoveKind::Move
         };
-        issue_group_move(&mut commands, &members, map_to_world(uv), None, kind, queue);
+        if !ids.is_empty() {
+            let target = map_to_world(uv);
+            outbox.push(crate::net::cmd::Cmd::Move { units: ids, target, line: None, kind, queue });
+            crate::orders::group_marker(&mut commands, target, None, kind);
+        }
     }
 }

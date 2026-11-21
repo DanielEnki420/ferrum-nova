@@ -255,8 +255,15 @@ pub struct AttackTarget(pub Entity);
 #[derive(Component)]
 pub struct AttackMove;
 
+/// Lokal ausgewählt. Als SparseSet gespeichert: das An- und Abwählen verschiebt die Entity nicht
+/// in eine andere Tabelle, sodass sich die Reihenfolge der Simulation dadurch nicht ändert.
 #[derive(Component)]
+#[component(storage = "SparseSet")]
 pub struct Selected;
+
+/// Stabile Nummer einer Sim-Entity, auf beiden Rechnern eines Duells gleich (Entity-IDs sind es nicht)
+#[derive(Component, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
+pub struct NetId(pub u32);
 
 #[derive(Component)]
 pub struct Building {
@@ -352,6 +359,7 @@ pub struct Structure(pub BuildingKind);
 
 /// Gegner, den der Spieler gerade nicht sieht (Nebel des Krieges): nicht anwählbar, nicht auf der Karte
 #[derive(Component)]
+#[component(storage = "SparseSet")]
 pub struct Fogged;
 
 /// Mauerstück oder Tor: sperrt den Weg, wird nur auf Befehl oder beim Durchbruch angegriffen

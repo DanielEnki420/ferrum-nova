@@ -18,6 +18,15 @@
         "cd web && npx astro preview --port 4321"
       ],
       "port": 4321
+    },
+    {
+      "name": "duell-relay",
+      "runtimeExecutable": "/bin/zsh",
+      "runtimeArgs": [
+        "-c",
+        "cd web/worker-duell && W=$(ls -d $HOME/.npm/_npx/*/node_modules/.bin/wrangler 2>/dev/null | head -1); ${W:-npx wrangler} dev --port 8787 --ip 127.0.0.1"
+      ],
+      "port": 8787
     }
   ]
 }

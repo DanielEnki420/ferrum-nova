@@ -1,7 +1,7 @@
 use crate::components::*;
 use crate::input::SelectionBox;
 use crate::construction::Placing;
-use crate::units::{production_rate, BuildRequest};
+use crate::units::production_rate;
 use bevy::prelude::*;
 use bevy::input::ButtonState;
 use bevy::input::mouse::MouseButtonInput;
@@ -218,7 +218,7 @@ pub fn build_buttons(
     mouse: Res<ButtonInput<MouseButton>>,
     factories: Query<(&Team, &Structure), Without<Construction>>,
     mut q: Query<(&BuildButton, &RelativeCursorPosition, &mut BackgroundColor)>,
-    mut w: MessageWriter<BuildRequest>,
+    mut outbox: ResMut<crate::net::cmd::Outbox>,
     mut placing: ResMut<Placing>,
     mut sfx: MessageWriter<crate::audio::PlaySfx>,
 ) {
@@ -231,7 +231,7 @@ pub fn build_buttons(
             sfx.write(crate::audio::PlaySfx::ui(crate::audio::Sfx::UiClick));
             match btn.0 {
                 BuildItem::Unit(kind) => {
-                    w.write(BuildRequest { team: PLAYER, kind });
+                    outbox.push(crate::net::cmd::Cmd::Produce { kind });
                 }
                 BuildItem::Structure(kind) => {
                     placing.kind = if placing.kind == Some(kind) { None } else { Some(kind) };
@@ -239,7 +239,7 @@ pub fn build_buttons(
             }
         }
         let active = matches!(btn.0, BuildItem::Structure(k) if placing.kind == Some(k));
-        let locked = matches!(btn.0, BuildItem::Unit(k) if k.needs_factory() && !crate::units::has_factory(&factories, PLAYER));
+        let locked = matches!(btn.0, BuildItem::Unit(k) if k.needs_factory() && !crate::units::has_factory(&factories, crate::net::me()));
         *bg = if locked {
             BTN_LOCKED
         } else if active || (over && (pressed_now || mouse.pressed(MouseButton::Left))) {
@@ -253,14 +253,14 @@ pub fn build_buttons(
     }
 }
 
-pub fn build_hotkeys(keys: Res<ButtonInput<KeyCode>>, mut w: MessageWriter<BuildRequest>) {
+pub fn build_hotkeys(keys: Res<ButtonInput<KeyCode>>, mut outbox: ResMut<crate::net::cmd::Outbox>) {
     // Strg/Cmd+Taste gehört dem Browser bzw. den Kontrollgruppen
     if crate::input::modifiers(&keys).1 {
         return;
     }
     for ((k, _), kind) in UNIT_KEYS.into_iter().zip(UnitKind::ALL) {
         if keys.just_pressed(k) {
-            w.write(BuildRequest { team: PLAYER, kind });
+            outbox.push(crate::net::cmd::Cmd::Produce { kind });
         }
     }
 }
@@ -282,14 +282,14 @@ pub fn update_hud(
         Query<&mut Text, With<AlertText>>,
     )>,
 ) {
-    let s = stock.0[PLAYER.0 as usize];
-    let count = units.iter().filter(|(t, _, _)| **t == PLAYER).count();
+    let s = stock.0[crate::net::me().0 as usize];
+    let count = units.iter().filter(|(t, _, _)| **t == crate::net::me()).count();
     if let Ok(mut t) = texts.p0().single_mut() {
         **t = format!("Ferrit: {}   Plasma: {}   Einheiten: {}", s[0], s[1], count);
     }
     let queue = hqs
         .iter()
-        .find(|(t, _)| **t == PLAYER)
+        .find(|(t, _)| **t == crate::net::me())
         .map(|(_, hq)| {
             if hq.queue.is_empty() {
                 "Bauschleife: leer".to_string()
@@ -301,7 +301,7 @@ pub fn update_hud(
             }
         })
         .unwrap_or_default();
-    let factories = structures.iter().filter(|(t, s)| **t == PLAYER && s.0 == BuildingKind::Fabrik).count();
+    let factories = structures.iter().filter(|(t, s)| **t == crate::net::me() && s.0 == BuildingKind::Fabrik).count();
     let queue = if factories > 0 {
         format!("{queue}   [Fabriken: {factories}, Tempo {:.0} %]", production_rate(factories) * 100.0)
     } else {
@@ -312,7 +312,7 @@ pub fn update_hud(
     }
     let mut counts = [0; 6];
     for (team, u, sel) in &units {
-        if sel && *team == PLAYER {
+        if sel && *team == crate::net::me() {
             counts[u.kind.idx()] += 1;
         }
     }
@@ -325,9 +325,9 @@ pub fn update_hud(
         "Tor: auf eine eigene Mauer setzen (rastet ein) | eigene Einheiten fahren durch | Esc: abbrechen".to_string()
     } else if let Some(k) = placing.kind {
         format!("{} platzieren: Linksklick | Shift: mehrere | Rechtsklick/Esc: abbrechen", k.name())
-    } else if mode.left_commands && counts.iter().sum::<i32>() == 0 && selected_hq.iter().any(|t| *t == PLAYER) {
+    } else if mode.left_commands && counts.iter().sum::<i32>() == 0 && selected_hq.iter().any(|t| *t == crate::net::me()) {
         "Hauptquartier: Klick ins Gelaende setzt den Sammelpunkt | Rechtsklick: Auswahl aufheben".to_string()
-    } else if counts.iter().sum::<i32>() == 0 && selected_hq.iter().any(|t| *t == PLAYER) {
+    } else if counts.iter().sum::<i32>() == 0 && selected_hq.iter().any(|t| *t == crate::net::me()) {
         "Hauptquartier: Rechtsklick setzt den Sammelpunkt (auf einem Feld: Sammler bauen dort ab)".to_string()
     } else if counts.iter().sum::<i32>() == 0 {
         let mode_hint = if mode.left_commands { "L: Zweitasten-Steuerung" } else { "L: Einknopf-Steuerung" };
@@ -427,7 +427,7 @@ pub fn update_selection_panel(
     mut shown: Local<Vec<Entity>>,
 ) {
     let Ok((panel_e, mut panel_node)) = panel.single_mut() else { return };
-    let mut list: Vec<(Entity, UnitKind)> = sel.iter().filter(|s| *s.1 == PLAYER).map(|s| (s.0, s.2.kind)).collect();
+    let mut list: Vec<(Entity, UnitKind)> = sel.iter().filter(|s| *s.1 == crate::net::me()).map(|s| (s.0, s.2.kind)).collect();
     list.sort_by_key(|(e, k)| (k.idx(), *e));
     let ids: Vec<Entity> = list.iter().map(|l| l.0).collect();
     if ids != *shown {

@@ -208,13 +208,14 @@ pub fn placement_input(
     kit: Res<ModelKit>,
     stock: Res<Stock>,
     mut placing: ResMut<Placing>,
-    mut reqs: MessageWriter<PlaceRequest>,
+    mut outbox: ResMut<crate::net::cmd::Outbox>,
     sites: SiteQuery,
     walls: Query<(&Transform, &Team, &Structure), With<Building>>,
     nodes: Query<&Transform, With<ResourceNode>>,
     mut ghosts: Query<(&mut Transform, &mut Visibility), (Without<Building>, Without<ResourceNode>)>,
     mut gizmos: Gizmos,
 ) {
+    let me = crate::net::me();
     for (key, kind) in [
         (KeyCode::KeyG, BuildingKind::Geschuetzturm),
         (KeyCode::KeyH, BuildingKind::Raffinerie),
@@ -258,7 +259,7 @@ pub fn placement_input(
     let shift = keys.any_pressed([KeyCode::ShiftLeft, KeyCode::ShiftRight]);
 
     // Bauradius um eigene Gebäude
-    for s in site_list.iter().filter(|s| s.team == PLAYER && !s.wall) {
+    for s in site_list.iter().filter(|s| s.team == me && !s.wall) {
         let c = terrain::on_ground(s.pos) + Vec3::Y * 0.3;
         gizmos.circle(Isometry3d::new(c, Quat::from_rotation_x(PI / 2.0)), BUILD_RANGE + s.radius, Color::srgba(0.5, 0.8, 1.0, 0.25));
     }
@@ -277,16 +278,16 @@ pub fn placement_input(
         let rot = along(start.map_or(Vec3::X, |a| p - a));
         // Gültigkeit Stück für Stück, Kosten laufen mit
         let mut sim = site_list.clone();
-        let mut budget = stock.0[PLAYER.0 as usize];
+        let mut budget = stock.0[me.0 as usize];
         let cost = kind.cost();
         let mut ok = Vec::new();
         for c in &segs {
             let afford = budget[0] >= cost[0] && budget[1] >= cost[1];
-            let valid = afford && can_place(kind, *c, PLAYER, &sim, &node_list);
+            let valid = afford && can_place(kind, *c, me, &sim, &node_list);
             if valid {
                 budget[0] -= cost[0];
                 budget[1] -= cost[1];
-                sim.push(Site { pos: *c, radius: kind.radius(), team: PLAYER, wall: true, gate: false });
+                sim.push(Site { pos: *c, radius: kind.radius(), team: me, wall: true, gate: false });
             }
             ok.push(valid);
             let col = if valid { Color::srgb(0.4, 1.0, 0.5) } else { Color::srgb(1.0, 0.35, 0.3) };
@@ -304,7 +305,7 @@ pub fn placement_input(
                 Some(_) => {
                     for (c, valid) in segs.iter().zip(&ok) {
                         if *valid {
-                            reqs.write(PlaceRequest { team: PLAYER, kind, pos: *c, rot: Some(rot) });
+                            outbox.push(crate::net::cmd::Cmd::Place { kind, pos: *c, rot: Some(rot) });
                         }
                     }
                     // Shift: am Ende weiterziehen, sonst fertig
@@ -325,7 +326,7 @@ pub fn placement_input(
         (BuildingKind::Tor, Some(p)) => {
             let snap = walls
                 .iter()
-                .filter(|(t, team, s)| **team == PLAYER && s.0 == BuildingKind::Mauer && flat(t.translation).distance(flat(p)) < 3.0)
+                .filter(|(t, team, s)| **team == me && s.0 == BuildingKind::Mauer && flat(t.translation).distance(flat(p)) < 3.0)
                 .min_by(|a, b| flat(a.0.translation).distance(flat(p)).total_cmp(&flat(b.0.translation).distance(flat(p))));
             match snap {
                 Some((t, _, _)) => (Some(t.translation), Some(t.rotation)),
@@ -335,10 +336,10 @@ pub fn placement_input(
         _ => (point, None),
     };
 
-    let valid = point.is_some_and(|p| can_place(kind, p, PLAYER, &site_list, &node_list) && stock.can_afford(PLAYER, kind.cost()));
+    let valid = point.is_some_and(|p| can_place(kind, p, me, &site_list, &node_list) && stock.can_afford(me, kind.cost()));
 
     // Vorschau neu aufbauen, wenn sich Typ oder Gültigkeit ändert
-    let default_rot = Transform::default().looking_to(-facing(PLAYER), Vec3::Y).rotation;
+    let default_rot = Transform::default().looking_to(-facing(me), Vec3::Y).rotation;
     if placing.ghost.is_none_or(|(_, k, v)| k != kind || v != valid) {
         if let Some((g, _, _)) = placing.ghost.take() {
             commands.entity(g).try_despawn();
@@ -350,7 +351,7 @@ pub fn placement_input(
             ))
             .id();
         let mat = &kit.ghost[if valid { 0 } else { 1 }];
-        models::build_structure(&mut commands, &kit, root, PLAYER, kind, Some(mat));
+        models::build_structure(&mut commands, &kit, root, me, kind, Some(mat));
         placing.ghost = Some((root, kind, valid));
     } else if let Some((g, _, _)) = placing.ghost
         && let Ok((mut t, mut vis)) = ghosts.get_mut(g)
@@ -373,7 +374,7 @@ pub fn placement_input(
     if mouse.just_pressed(MouseButton::Left) {
         placing.block_click = true;
         if valid {
-            reqs.write(PlaceRequest { team: PLAYER, kind, pos: p, rot });
+            outbox.push(crate::net::cmd::Cmd::Place { kind, pos: p, rot });
             if !shift {
                 placing.kind = None;
             }
@@ -464,7 +465,7 @@ pub fn structure_aim(
     for (t, tref, atk) in &roots {
         let Ok(mut ht) = heads.get_mut(tref.0) else { continue };
         let (root_yaw, _, _) = t.rotation.to_euler(EulerRot::YXZ);
-        let want = match atk.and_then(|a| snap.0.get(&a.0)) {
+        let want = match atk.and_then(|a| snap.get(&a.0)) {
             Some(tgt) => {
                 let to = flat(tgt.pos - t.translation);
                 Heading::from_dir(to).0 - root_yaw

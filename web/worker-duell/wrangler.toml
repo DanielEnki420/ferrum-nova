@@ -1,0 +1,16 @@
+# Duell-Relay (Cloudflare Worker mit Durable Object). Einmalig deployen:
+#   cd web/worker-duell && npx wrangler deploy
+# Danach kennt das Pages-Projekt die Klasse über web/wrangler.toml (script_name).
+name = "ferrum-nova-duell"
+main = "src/index.js"
+compatibility_date = "2025-09-01"
+workers_dev = false
+
+[[durable_objects.bindings]]
+name = "DUELL"
+class_name = "DuellRaum"
+
+# SQLite-Speicher: im kostenlosen Workers-Tarif verfügbar
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["DuellRaum"]

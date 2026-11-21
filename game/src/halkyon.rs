@@ -76,6 +76,7 @@ pub struct EclipseLight(f32);
 
 /// Gebäude hat seine Leuchte schon
 #[derive(Component)]
+#[component(storage = "SparseSet")]
 pub struct Lit;
 
 #[derive(Component)]
@@ -107,32 +108,39 @@ fn mix(a: Color, b: Color, k: f32) -> Color {
 
 const NIGHT: Color = Color::srgb(0.07, 0.08, 0.13);
 
-/// Uhr, Licht, Anzeige und die Gelegenheit für VAAR
-pub fn update_eclipse(
+/// Uhr der Finsternis, im Simulationstakt (im Duell auf beiden Rechnern gleich). Zu Beginn der
+/// Dämmerung zieht VAAR im Einzelspieler den nächsten Angriff vor.
+pub fn tick_clock(
     time: Res<Time>,
     mut eclipse: ResMut<Eclipse>,
-    mut sun: Query<&mut DirectionalLight>,
-    mut ambient: ResMut<GlobalAmbientLight>,
-    mut clear: ResMut<ClearColor>,
-    mut cam: Query<(&mut EnvironmentMapLight, &mut DistanceFog), With<MainCamera>>,
-    mut text: Query<(&mut Text, &mut TextColor), With<EclipseText>>,
     mut ai: ResMut<AiState>,
     mut sfx: MessageWriter<PlaySfx>,
-    mut shown: Local<Option<f32>>,
+    rules: Option<Res<crate::sim::SimRules>>,
 ) {
     let before = eclipse.clock;
     eclipse.clock += time.delta_secs();
     let t = eclipse.clock;
     eclipse.shade = shade_at(t);
-    let s = eclipse.shade;
-
-    // Beginn der Dämmerung: Warnton, und VAAR zieht den nächsten Angriff vor
     if until_next(before) > 0.0 && until_next(t) == 0.0 {
         sfx.write(PlaySfx::ui(Sfx::Alert));
-        if ai.wave.is_none() && ai.next_attack - ai.elapsed < 120.0 {
+        if !rules.is_some_and(|r| r.duel) && ai.wave.is_none() && ai.next_attack - ai.elapsed < 120.0 {
             ai.next_attack = ai.elapsed + DUSK * 0.6;
         }
     }
+}
+
+/// Licht und Anzeige (Darstellung, jedes Bild)
+pub fn update_eclipse(
+    eclipse: Res<Eclipse>,
+    mut sun: Query<&mut DirectionalLight>,
+    mut ambient: ResMut<GlobalAmbientLight>,
+    mut clear: ResMut<ClearColor>,
+    mut cam: Query<(&mut EnvironmentMapLight, &mut DistanceFog), With<MainCamera>>,
+    mut text: Query<(&mut Text, &mut TextColor), With<EclipseText>>,
+    mut shown: Local<Option<f32>>,
+) {
+    let t = eclipse.clock;
+    let s = eclipse.shade;
 
     if shown.is_none_or(|v| (v - s).abs() > 1e-3) {
         *shown = Some(s);

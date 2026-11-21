@@ -213,6 +213,7 @@ pub enum MoveKind {
 }
 
 /// Gruppe an einen Punkt schicken: Formation, gemeinsames Tempo, Blickrichtung am Ziel.
+/// Läuft in der Simulation (net::cmd::apply_cmds); den Marker setzt die Eingabe selbst.
 /// `line`: gezogene Frontlinie (Anfang, Ende). `queue`: an die Befehlsschlange anhängen.
 pub fn issue_group_move(c: &mut Commands, members: &[Member], target: Vec3, line: Option<(Vec3, Vec3)>, kind: MoveKind, queue: bool) {
     let movers: Vec<Member> = members.iter().copied().filter(|m| kind == MoveKind::Move || m.armed).collect();
@@ -262,12 +263,16 @@ pub fn issue_group_move(c: &mut Commands, members: &[Member], target: Vec3, line
             }
         }
     }
+}
+
+/// Marker eines Gruppenbefehls (nur auf dem Rechner, der den Befehl gibt)
+pub fn group_marker(c: &mut Commands, target: Vec3, line: Option<(Vec3, Vec3)>, kind: MoveKind) {
     let marker = match kind {
         MoveKind::Move => MarkerKind::Move,
         MoveKind::AttackMove => MarkerKind::AttackMove,
         MoveKind::Patrol => MarkerKind::Patrol,
     };
-    spawn_marker(c, marker, center, None);
+    spawn_marker(c, marker, line.map_or(target, |(a, b)| (a + b) * 0.5), None);
 }
 
 fn clamp_map(p: Vec3) -> Vec3 {
