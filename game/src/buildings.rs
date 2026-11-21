@@ -17,6 +17,15 @@ pub struct HqMeshes {
     pub glow: Handle<Mesh>,
     pub glass: Handle<Mesh>,
     pub dish: Handle<Mesh>,
+    /// Warm beleuchtete Fenster (unbeleuchtet gerendert)
+    pub lamps: Handle<Mesh>,
+}
+
+/// Ein Fenster mit Innenlicht: mal hell, mal gedimmt, selten dunkel
+fn window(g: &mut Geo, center: Vec3, size: Vec3) {
+    let h = ((center.x * 3.17 + center.y * 5.71 + center.z * 9.13).sin() * 43_758.547).fract().abs();
+    let k = if h < 0.18 { 0.06 } else { 0.55 + h * 0.6 };
+    g.cuboid(center, size, Quat::IDENTITY, Vec3::new(2.4, 1.55, 0.7) * k);
 }
 
 /// Lässt ein Bauteil um die Hochachse kreisen (Radar)
@@ -249,7 +258,21 @@ pub fn build_hq(team: Team, meshes: &mut Assets<Mesh>) -> HqMeshes {
     dish.cuboid(Vec3::new(0.0, 0.42, 0.0), Vec3::new(1.5, 0.35, 0.06), Quat::from_rotation_x(-0.25), lin(Color::srgb(0.8, 0.8, 0.78)));
     dish.cuboid(Vec3::new(0.0, 0.42, 0.06), Vec3::new(1.4, 0.05, 0.08), Quat::IDENTITY, p.steel_dark);
 
+    // Fenster im Erdgeschoss: zwischen Sockel und Fensterband
+    let mut lamps = Geo::default();
+    let (wy, fz, bkz, sx) = (1.62, 1.642, -3.068, 3.04);
+    window(&mut lamps, Vec3::new(-2.0, wy, fz), Vec3::new(0.55, 0.3, 0.06));
+    for x in [-1.8f32, -0.6, 0.6, 1.8] {
+        window(&mut lamps, Vec3::new(x, wy, bkz), Vec3::new(0.7, 0.3, 0.06));
+    }
+    for x in [-sx, sx] {
+        for z in [bz - 1.0, bz + 1.0] {
+            window(&mut lamps, Vec3::new(x, wy, z), Vec3::new(0.06, 0.3, 0.7));
+        }
+    }
+
     HqMeshes {
+        lamps: meshes.add(lamps.build().expect("HQ-Fenster")),
         dish_pos: tw + Vec3::Y * 5.72,
         body: meshes.add(g.build().expect("HQ")),
         glow: meshes.add(glow.build().expect("HQ-Licht")),
@@ -266,6 +289,8 @@ pub struct StructMeshes {
     pub body: Handle<Mesh>,
     pub glow: Handle<Mesh>,
     pub glass: Option<Handle<Mesh>>,
+    /// Warm beleuchtete Fenster
+    pub lamps: Option<Handle<Mesh>>,
     /// Drehbarer Geschützkopf: Mesh, Leuchtteile, Drehpunkt
     pub head: Option<(Handle<Mesh>, Handle<Mesh>, Vec3)>,
     /// Rotierendes Bauteil (Lüfter) und seine Lage
@@ -404,6 +429,7 @@ pub fn build_turret(team: Team, meshes: &mut Assets<Mesh>) -> StructMeshes {
         body: meshes.add(g.build().expect("Turm")),
         glow: meshes.add(glow.build().expect("Turm-Licht")),
         glass: None,
+        lamps: None,
         head: Some((meshes.add(h.build().expect("Kopf")), meshes.add(hg.build().expect("Kopf-Licht")), Vec3::Y * (top + 1.3))),
         spin: None,
         height: 3.4,
@@ -523,10 +549,22 @@ pub fn build_refinery(team: Team, meshes: &mut Assets<Mesh>) -> StructMeshes {
     }
     g.weather(p.dust, 1.3, 0.45);
 
+    // Fenster der Halle
+    let mut lamps = Geo::default();
+    for z in [-2.1f32, -1.1, -0.1] {
+        for x in [-3.0f32, 0.4] {
+            window(&mut lamps, Vec3::new(x, 1.45, z), Vec3::new(0.06, 0.3, 0.5));
+        }
+    }
+    for x in [-2.2f32, -0.4] {
+        window(&mut lamps, Vec3::new(x, 1.45, -2.9), Vec3::new(0.5, 0.3, 0.06));
+    }
+
     StructMeshes {
         body: meshes.add(g.build().expect("Raffinerie")),
         glow: meshes.add(glow.build().expect("Raffinerie-Licht")),
         glass: None,
+        lamps: Some(meshes.add(lamps.build().expect("Raffinerie-Fenster"))),
         head: None,
         spin: None,
         height: 5.8,
@@ -655,10 +693,24 @@ pub fn build_factory(team: Team, meshes: &mut Assets<Mesh>) -> StructMeshes {
         );
     }
 
+    // Fenster zwischen den Pfeilern (Rückwand und Seiten)
+    let mut lamps = Geo::default();
+    for k in 0..5 {
+        let x = cx - w / 2.0 + 0.88 + k as f32 * (w - 0.8) / 5.0;
+        window(&mut lamps, Vec3::new(x, 1.6, cz - d / 2.0), Vec3::new(0.55, 0.35, 0.06));
+    }
+    for k in 0..4 {
+        let z = cz - d / 2.0 + 0.96 + k as f32 * (d - 0.8) / 4.0;
+        for x in [cx - w / 2.0, cx + w / 2.0] {
+            window(&mut lamps, Vec3::new(x, 1.6, z), Vec3::new(0.06, 0.35, 0.55));
+        }
+    }
+
     StructMeshes {
         body: meshes.add(g.build().expect("Fabrik")),
         glow: meshes.add(glow.build().expect("Fabrik-Licht")),
         glass: Some(meshes.add(glass.build().expect("Fabrik-Glas"))),
+        lamps: Some(meshes.add(lamps.build().expect("Fabrik-Fenster"))),
         head: None,
         spin: Some((meshes.add(fan.build().expect("Lüfter")), ac + Vec3::Y * 1.3)),
         height: 6.6,

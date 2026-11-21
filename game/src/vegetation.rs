@@ -102,7 +102,7 @@ fn blocked(x: f32, z: f32) -> bool {
     if p.distance(PLAYER_HQ_POS) < 13.0 || p.distance(ENEMY_HQ_POS) < 13.0 {
         return true;
     }
-    FIELDS.iter().any(|(f, _, _)| p.distance(*f) < 5.5)
+    FIELDS.iter().any(|(f, _, _)| p.distance(*f) < 5.5) || terrain::track_weight(x, z) > 0.3
 }
 
 /// Ein Grasbüschel aus mehreren gebogenen Halmen

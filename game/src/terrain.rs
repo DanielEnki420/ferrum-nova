@@ -85,6 +85,68 @@ fn fbm_periodic(x: f32, z: f32, seed: u32, octaves: u32, period: i32) -> f32 {
     sum / norm
 }
 
+// ---------------------------------------------------------------- Wege und Krater
+
+/// Ausgefahrene Wege der Spielerseite (die Gegnerseite ist punktgespiegelt):
+/// vom HQ über das mittlere Ferritfeld zur Plasmaquelle, dazu Abzweige zu den Feldern an der Basis
+const TRACKS: [&[(f32, f32)]; 3] = [
+    &[(-40.0, 40.0), (-33.0, 30.0), (-22.0, 20.5), (-12.5, 10.0), (-5.0, 4.0)],
+    &[(-40.0, 40.0), (-35.0, 45.5), (-30.0, 48.0)],
+    &[(-40.0, 40.0), (-45.5, 34.0), (-48.5, 28.5)],
+];
+
+/// Halbe Breite eines Weges in Metern
+pub const TRACK_HALF: f32 = 2.2;
+
+/// Vorzeichenbehafteter Abstand zur nächsten Wegmitte (links/rechts) – nur nahe an Wegen sinnvoll
+pub fn track_offset(x: f32, z: f32) -> f32 {
+    let p = Vec2::new(x, z);
+    let mut best = (f32::MAX, 0.0f32);
+    for mirror in [1.0f32, -1.0] {
+        for line in TRACKS {
+            for w in line.windows(2) {
+                let a = Vec2::new(w[0].0, w[0].1) * mirror;
+                let b = Vec2::new(w[1].0, w[1].1) * mirror;
+                let ab = b - a;
+                let t = ((p - a).dot(ab) / ab.length_squared()).clamp(0.0, 1.0);
+                let d = p.distance(a + ab * t);
+                if d < best.0 {
+                    let side = ab.perp_dot(p - a).signum();
+                    best = (d, d * side);
+                }
+            }
+        }
+    }
+    best.1
+}
+
+/// Wie stark eine Stelle zum Weg gehört (1 = Wegmitte, 0 = abseits)
+pub fn track_weight(x: f32, z: f32) -> f32 {
+    1.0 - smoothstep(TRACK_HALF * 0.75, TRACK_HALF * 1.5, track_offset(x, z).abs())
+}
+
+/// Alte Granattrichter abseits der Felder: (Mitte, Radius), punktgespiegelt
+pub const CRATERS: [(f32, f32, f32); 4] = [(-8.0, 32.0, 4.2), (32.0, 8.0, 3.6), (-24.0, -30.0, 4.8), (-36.0, 10.0, 3.2)];
+
+fn craters() -> impl Iterator<Item = (Vec2, f32)> {
+    CRATERS.into_iter().flat_map(|(x, z, r)| [(Vec2::new(x, z), r), (Vec2::new(-x, -z), r)])
+}
+
+/// Kraterform: Mulde mit aufgeworfenem Rand. (Höhe, Anteil Krater 0..1)
+fn crater_at(x: f32, z: f32) -> (f32, f32) {
+    let mut h = 0.0;
+    let mut k: f32 = 0.0;
+    for (c, r) in craters() {
+        let d = c.distance(Vec2::new(x, z)) / r;
+        if d < 1.0 {
+            h -= 1.1 * (1.0 - d * d);
+        }
+        h += 0.38 * (-((d - 1.0) * 3.0).powi(2)).exp();
+        k = k.max(1.0 - smoothstep(0.9, 1.4, d));
+    }
+    (h, k)
+}
+
 // ---------------------------------------------------------------- Höhe
 
 /// Geländehöhe an einer Stelle. Spielfeld sanft gewellt, Basen und Felder flach, Berge am Rand.
@@ -100,7 +162,9 @@ pub fn height(x: f32, z: f32) -> f32 {
     let edge = x.abs().max(z.abs());
     let ridge = 1.0 - (fbm(x * 0.045, z * 0.045, 3, 5)).abs();
     let mountains = smoothstep(MAP_HALF - 8.0, MAP_HALF + 32.0, edge) * (5.0 + ridge * ridge * 26.0);
-    rolling * flat + mountains
+    let (crater, _) = crater_at(x, z);
+    // Wege sind festgefahren und liegen etwas tiefer
+    (rolling + crater) * flat + mountains - track_weight(x, z) * 0.12
 }
 
 pub fn normal(x: f32, z: f32) -> Vec3 {
@@ -127,6 +191,7 @@ pub fn build_mesh() -> Mesh {
     let mut positions = Vec::with_capacity(n * n);
     let mut normals = Vec::with_capacity(n * n);
     let mut uvs = Vec::with_capacity(n * n);
+    let mut uvs_b: Vec<[f32; 2]> = Vec::with_capacity(n * n);
     let mut colors = Vec::with_capacity(n * n);
 
     for iz in 0..n {
@@ -138,6 +203,8 @@ pub fn build_mesh() -> Mesh {
             positions.push([x, h, z]);
             normals.push(nrm.to_array());
             uvs.push([x / 14.0, z / 14.0]);
+            // zweiter UV-Satz für den Shader: Abstand zur Wegmitte, Weg-Anteil
+            uvs_b.push([track_offset(x, z), track_weight(x, z)]);
             colors.push(splat_weights(x, z, h, nrm));
         }
     }
@@ -157,6 +224,7 @@ pub fn build_mesh() -> Mesh {
         .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, positions)
         .with_inserted_attribute(Mesh::ATTRIBUTE_NORMAL, normals)
         .with_inserted_attribute(Mesh::ATTRIBUTE_UV_0, uvs)
+        .with_inserted_attribute(Mesh::ATTRIBUTE_UV_1, uvs_b)
         .with_inserted_attribute(Mesh::ATTRIBUTE_COLOR, colors)
         .with_inserted_indices(Indices::U32(indices))
 }
@@ -191,8 +259,18 @@ fn splat_weights(x: f32, z: f32, h: f32, nrm: Vec3) -> [f32; 4] {
         gravel = gravel.max(wear * (0.5 + 0.5 * fine));
         grass *= 1.0 - wear;
     }
+    // Wege: festgefahrene Erde, Kies an den Rändern, kein Gras
+    let off = track_offset(x, z).abs();
+    let on_track = 1.0 - smoothstep(TRACK_HALF * 0.75, TRACK_HALF * 1.5, off);
+    let shoulder = (1.0 - smoothstep(TRACK_HALF * 1.3, TRACK_HALF * 2.2, off)) - on_track;
+    grass *= 1.0 - (on_track + shoulder).min(1.0);
+    gravel = gravel * (1.0 - on_track) + shoulder.max(0.0) * 0.9;
+    // Krater: Geröll und aufgewühlte Erde
+    let (_, crater) = crater_at(x, z);
+    gravel = gravel.max(crater * 0.8);
+    grass *= 1.0 - crater;
     let free = 1.0 - rock.min(1.0);
-    let w = [0.6 * free, gravel.min(1.0) * free, rock.min(1.0), grass.min(1.0) * free];
+    let w = [(0.6 + on_track * 2.5) * free, gravel.min(1.0) * free, rock.min(1.0), grass.min(1.0) * free];
     let sum = w.iter().sum::<f32>().max(1e-4);
     w.map(|v| v / sum)
 }
@@ -311,4 +389,34 @@ pub fn rock_mesh(seed: u32) -> Mesh {
     }
     mesh.compute_smooth_normals();
     mesh
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn tracks_connect_bases_and_are_symmetric() {
+        // Wegmitte am HQ-Ausgang, abseits kein Weg
+        assert!(track_weight(-40.0, 40.0) > 0.99);
+        assert!(track_weight(40.0, -40.0) > 0.99);
+        assert!(track_weight(-40.0, -40.0) < 0.01);
+        // Seiten: links und rechts der Wegmitte haben entgegengesetzte Vorzeichen
+        let (a, b) = (track_offset(-33.0 + 1.0, 30.0 + 0.7), track_offset(-33.0 - 1.0, 30.0 - 0.7));
+        assert!(a * b < 0.0, "kein Vorzeichenwechsel: {a} / {b}");
+    }
+
+    #[test]
+    fn craters_are_bowls_away_from_fields() {
+        for (c, r) in craters() {
+            assert!(height(c.x, c.y) < height(c.x + r, c.y) - 0.5, "Krater bei {c} ist keine Mulde");
+            for (f, _, _) in FIELDS {
+                assert!(c.distance(Vec2::new(f.x, f.z)) > r + 8.0, "Krater {c} zu nah an Feld {f}");
+            }
+            for hq in [PLAYER_HQ_POS, ENEMY_HQ_POS] {
+                assert!(c.distance(Vec2::new(hq.x, hq.z)) > r + 14.0);
+            }
+            assert!(track_weight(c.x, c.y) < 0.01, "Krater {c} liegt auf einem Weg");
+        }
+    }
 }

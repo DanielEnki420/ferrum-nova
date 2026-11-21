@@ -20,12 +20,12 @@ pub fn setup_world(
     // Sonne: tief stehend und warm, für lange Schatten
     commands.spawn((
         DirectionalLight {
-            illuminance: 11_000.0,
-            color: Color::srgb(1.0, 0.93, 0.82),
+            illuminance: 11_500.0,
+            color: Color::srgb(1.0, 0.89, 0.74),
             shadow_maps_enabled: true,
             ..default()
         },
-        Transform::from_xyz(-40.0, 38.0, 30.0).looking_at(Vec3::ZERO, Vec3::Y),
+        Transform::from_translation(crate::sky::sun_dir() * 60.0).looking_at(Vec3::ZERO, Vec3::Y),
         CascadeShadowConfigBuilder {
             num_cascades: 1,
             maximum_distance: 140.0,
@@ -34,9 +34,11 @@ pub fn setup_world(
         }
         .build(),
     ));
+    // Das meiste Umgebungslicht kommt jetzt aus der Himmels-Umgebungskarte (sky.rs);
+    // ein kleiner Grundwert verhindert ganz schwarze Ecken
     commands.insert_resource(GlobalAmbientLight {
         color: Color::srgb(0.62, 0.70, 0.85),
-        brightness: 420.0,
+        brightness: 90.0,
         ..default()
     });
 
@@ -70,7 +72,7 @@ pub fn setup_world(
         if p.distance(PLAYER_HQ_POS) < 17.0 || p.distance(ENEMY_HQ_POS) < 17.0 {
             continue;
         }
-        if FIELDS.iter().any(|(f, _, _)| p.distance(*f) < 6.0) {
+        if FIELDS.iter().any(|(f, _, _)| p.distance(*f) < 6.0) || terrain::track_weight(x, z) > 0.1 {
             continue;
         }
         placed += 1;
@@ -94,6 +96,86 @@ pub fn setup_world(
             slot => *slot = Some(m),
         }
     }
+    // Kiesel: viele kleine Steine, gehäuft an Hangfüßen, Wegrändern und in Kratern
+    let mut pebbles = 0;
+    while pebbles < 700 {
+        let x = rng.range(-MAP_HALF, MAP_HALF);
+        let z = rng.range(-MAP_HALF, MAP_HALF);
+        let p = Vec3::new(x, 0.0, z);
+        if p.distance(PLAYER_HQ_POS) < 12.0 || p.distance(ENEMY_HQ_POS) < 12.0 || FIELDS.iter().any(|(f, _, _)| p.distance(*f) < 4.0) {
+            continue;
+        }
+        let w = terrain::weights_at(x, z);
+        let track = terrain::track_weight(x, z);
+        // auf der Fahrbahn selbst liegen keine Steine, am Rand und im Geröll viele
+        let chance = (w[1] * 0.8 + (track * (1.0 - track) * 3.0) + w[2] * 0.4).min(1.0) * (1.0 - track.powi(4));
+        if rng.next_f32() > chance {
+            continue;
+        }
+        pebbles += 1;
+        let s = rng.range(0.07, 0.24);
+        let g = terrain::on_ground(p);
+        let tint = rock_tints[(rng.next_f32() * 3.0) as usize % 3] * rng.range(0.85, 1.25);
+        let tf = Transform::from_translation(g - Vec3::Y * s * 0.25)
+            .with_scale(Vec3::new(s * rng.range(0.8, 1.5), s * rng.range(0.6, 1.0), s * rng.range(0.8, 1.5)))
+            .with_rotation(Quat::from_rotation_y(rng.range(0.0, std::f32::consts::TAU)));
+        let mut m = rock_shapes[(rng.next_f32() * 6.0) as usize % 6].clone().transformed_by(tf);
+        let n = m.count_vertices();
+        m.insert_attribute(Mesh::ATTRIBUTE_COLOR, vec![tint.to_f32_array(); n]);
+        match &mut chunks[chunk_of(g)] {
+            Some(acc) => {
+                let _ = acc.merge(&m);
+            }
+            slot => *slot = Some(m),
+        }
+    }
+
+    // Felsformationen am Rand des Spielfelds: geschichtete Tafelberge und Felsnadeln
+    let bands = [
+        LinearRgba::from(Color::srgb(0.46, 0.38, 0.29)),
+        LinearRgba::from(Color::srgb(0.36, 0.32, 0.28)),
+        LinearRgba::from(Color::srgb(0.52, 0.43, 0.33)),
+        LinearRgba::from(Color::srgb(0.30, 0.27, 0.25)),
+    ];
+    let mut formations = 0;
+    let mut tries = 0;
+    while formations < 18 && tries < 2000 {
+        tries += 1;
+        let x = rng.range(-MAP_HALF - 24.0, MAP_HALF + 24.0);
+        let z = rng.range(-MAP_HALF - 24.0, MAP_HALF + 24.0);
+        let edge = x.abs().max(z.abs());
+        if !(MAP_HALF + 2.0..MAP_HALF + 24.0).contains(&edge) {
+            continue;
+        }
+        let base = terrain::on_ground(Vec3::new(x, 0.0, z));
+        let spire = rng.next_f32() < 0.35;
+        let layers = if spire { 4 + (rng.next_f32() * 3.0) as usize } else { 3 + (rng.next_f32() * 3.0) as usize };
+        let mut width = if spire { rng.range(2.0, 3.2) } else { rng.range(5.0, 9.0) };
+        let mut y = base.y - 1.5;
+        let yaw = rng.range(0.0, std::f32::consts::TAU);
+        let mut off = Vec3::ZERO;
+        for layer in 0..layers {
+            let h = rng.range(1.4, 2.6) * if spire { 1.3 } else { 1.0 };
+            let tf = Transform::from_translation(Vec3::new(x, y, z) + off)
+                .with_scale(Vec3::new(width * rng.range(0.85, 1.15), h, width * rng.range(0.7, 1.0)))
+                .with_rotation(Quat::from_rotation_y(yaw + rng.range(-0.3, 0.3)));
+            let mut m = rock_shapes[(layer + formations) % 6].clone().transformed_by(tf);
+            let n = m.count_vertices();
+            let tint = bands[(layer + formations) % 4] * rng.range(0.9, 1.1);
+            m.insert_attribute(Mesh::ATTRIBUTE_COLOR, vec![tint.to_f32_array(); n]);
+            match &mut chunks[chunk_of(base)] {
+                Some(acc) => {
+                    let _ = acc.merge(&m);
+                }
+                slot => *slot = Some(m),
+            }
+            y += h * 0.78;
+            width *= if spire { rng.range(0.78, 0.95) } else { rng.range(0.82, 0.97) };
+            off += Vec3::new(rng.range(-0.3, 0.3), 0.0, rng.range(-0.3, 0.3));
+        }
+        formations += 1;
+    }
+
     for m in chunks.into_iter().flatten() {
         commands.spawn((Mesh3d(meshes.add(m)), MeshMaterial3d(rock_mat.clone())));
     }

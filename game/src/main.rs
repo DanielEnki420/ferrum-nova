@@ -5,6 +5,7 @@
 #![allow(clippy::too_many_arguments, clippy::type_complexity)]
 
 mod ai;
+mod atmo;
 mod buildings;
 mod components;
 mod construction;
@@ -15,6 +16,7 @@ mod minimap;
 mod models;
 mod orders;
 mod resources;
+mod sky;
 mod splat;
 mod terrain;
 mod units;
@@ -58,19 +60,21 @@ fn main() {
         .init_resource::<input::DragState>()
         .init_resource::<input::ControlGroups>()
         .init_resource::<input::Hover>()
+        .init_resource::<input::ClickMode>()
         .init_resource::<orders::Alerts>()
         .init_resource::<ai::AiState>()
         .init_resource::<construction::Placing>()
         .add_message::<units::BuildRequest>()
         .add_message::<construction::PlaceRequest>()
         .add_message::<fx::FxEvent>()
-        .add_systems(Startup, (world::setup_world, input::setup_camera, hud::setup_hud, hud::setup_perf, minimap::setup_minimap, splat::load_terrain_textures, vegetation::setup_vegetation))
+        .add_systems(Startup, (world::setup_world, input::setup_camera, hud::setup_hud, hud::setup_perf, minimap::setup_minimap, splat::load_terrain_textures, vegetation::setup_vegetation, atmo::setup_atmo))
         .add_systems(
             Update,
             ((
                 input::camera_control,
                 construction::placement_input,
                 input::mouse_commands,
+                input::toggle_click_mode,
                 input::order_hotkeys,
                 input::control_groups,
                 input::select_army,
@@ -138,10 +142,15 @@ fn main() {
                 units::spin_wheels,
                 units::vehicle_visuals,
                 models::pulse_lights,
+                models::pulse_beacons,
                 buildings::spin,
                 resources::shrink_nodes,
                 resources::rise,
                 input::update_shadows,
+                input::update_focus,
+                atmo::attach_field_glow,
+                atmo::pulse_field_glow,
+                atmo::update_dust,
             )
                 .chain(),
         )

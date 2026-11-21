@@ -16,6 +16,35 @@
   <script>
     // Kein Browser-Kontextmenü im Spiel: Rechtsklick und (auf dem Mac) Strg+Klick sind Spielbefehle
     document.addEventListener('contextmenu', (e) => e.preventDefault());
+
+    // Mausrad, Trackpad-Wischen und Fingerspreizen auseinanderhalten.
+    // Das Spiel zoomt bei Zeilen-Ereignissen und verschiebt die Kamera bei Pixel-Ereignissen.
+    // Zoom (Mausrad, Fingerspreizen) wird deshalb als Zeilen-Ereignis neu ausgelöst,
+    // Wischen mit zwei Fingern geht unverändert als Pixel-Ereignis weiter.
+    let trackpadSeen = false;
+    window.addEventListener('wheel', (e) => {
+      if (!e.isTrusted || e.target.id !== 'game') return;
+      let lines = null;
+      if (e.ctrlKey) {
+        // Fingerspreizen meldet der Browser als Mausrad mit Strg
+        lines = e.deltaY / 12;
+      } else if (e.deltaMode !== 0) {
+        return; // Mausrad, das schon in Zeilen zählt
+      } else {
+        // Seitliche Bewegung gibt es nur auf dem Trackpad. Danach gilt: Rastende Räder
+        // melden Vielfache von 120, alles andere ist Wischen.
+        if (e.deltaX !== 0) trackpadSeen = true;
+        const notched = e.wheelDeltaY && Math.abs(e.wheelDeltaY) % 120 === 0;
+        if (trackpadSeen && !notched) return;
+        lines = e.deltaY / 50;
+      }
+      e.preventDefault();
+      e.stopImmediatePropagation();
+      e.target.dispatchEvent(new WheelEvent('wheel', {
+        deltaX: 0, deltaY: lines, deltaMode: WheelEvent.DOM_DELTA_LINE,
+        clientX: e.clientX, clientY: e.clientY, bubbles: true, cancelable: true,
+      }));
+    }, { capture: true, passive: false });
   </script>
 </body>
 </html>

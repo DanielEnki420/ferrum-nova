@@ -17,6 +17,30 @@ struct WindParams {
 
 @group(constants::MATERIAL_BIND_GROUP) @binding(100) var<uniform> wind: WindParams;
 
+// Wolkenschatten: weiches Rauschen, das mit dem Wind über die Karte zieht
+fn cloud_hash(p: vec2<f32>) -> f32 {
+    return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453);
+}
+
+fn cloud_noise(p: vec2<f32>) -> f32 {
+    let i = floor(p);
+    let f = fract(p);
+    let u = f * f * (3.0 - 2.0 * f);
+    let a = cloud_hash(i);
+    let b = cloud_hash(i + vec2(1.0, 0.0));
+    let c = cloud_hash(i + vec2(0.0, 1.0));
+    let d = cloud_hash(i + vec2(1.0, 1.0));
+    return mix(mix(a, b, u.x), mix(c, d, u.x), u.y);
+}
+
+// 0 = Sonne, 1 = voller Wolkenschatten
+fn cloud_shadow(xz: vec2<f32>, t: f32) -> f32 {
+    let p = xz * 0.013 + vec2(t * 0.030, t * 0.0165);
+    let n = cloud_noise(p) * 0.55 + cloud_noise(p * 2.1 + vec2(3.7, 1.9)) * 0.3 + cloud_noise(p * 4.3 - vec2(1.3, 5.1)) * 0.15;
+    return smoothstep(0.50, 0.68, n);
+}
+
+
 @vertex
 fn vertex(v: Vertex) -> VertexOutput {
     var out: VertexOutput;
@@ -40,6 +64,8 @@ fn vertex(v: Vertex) -> VertexOutput {
     out.position = position_world_to_clip(wp.xyz);
     out.world_normal = mesh_functions::mesh_normal_local_to_world(vert.normal, v.instance_index);
     out.uv = vert.uv;
-    out.color = vert.color;
+    // Wolkenschatten wie auf dem Gelände (gleiche Funktion, gleiche Zeit)
+    let shade = mix(1.0, 0.58, cloud_shadow(wp.xz, globals.time));
+    out.color = vec4(vert.color.rgb * shade, vert.color.a);
     return out;
 }

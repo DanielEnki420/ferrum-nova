@@ -290,6 +290,7 @@ pub fn update_hud(
     selected_hq: Query<&Team, (With<Hq>, With<Selected>)>,
     placing: Res<Placing>,
     alerts: Res<crate::orders::Alerts>,
+    mode: Res<crate::input::ClickMode>,
     mut texts: ParamSet<(
         Query<&mut Text, With<StockText>>,
         Query<&mut Text, With<QueueText>>,
@@ -334,12 +335,17 @@ pub fn update_hud(
     }
     let sel_text = if let Some(k) = placing.kind {
         format!("{} platzieren: Linksklick | Shift: mehrere | Rechtsklick/Esc: abbrechen", k.name())
+    } else if mode.left_commands && counts.iter().sum::<i32>() == 0 && selected_hq.iter().any(|t| *t == PLAYER) {
+        "Hauptquartier: Klick ins Gelaende setzt den Sammelpunkt | Rechtsklick: Auswahl aufheben".to_string()
     } else if counts.iter().sum::<i32>() == 0 && selected_hq.iter().any(|t| *t == PLAYER) {
         "Hauptquartier: Rechtsklick setzt den Sammelpunkt (auf einem Feld: Sammler bauen dort ab)".to_string()
     } else if counts.iter().sum::<i32>() == 0 {
-        "Links: auswaehlen | Doppelklick: gleicher Typ | F: alle Kampfeinheiten | 1-9: Gruppe abrufen".to_string()
+        let mode_hint = if mode.left_commands { "L: Zweitasten-Steuerung" } else { "L: Einknopf-Steuerung" };
+        format!("Links: auswaehlen | Doppelklick: gleicher Typ | F: alle Kampfeinheiten | 1-9: Gruppe abrufen | {mode_hint}")
+    } else if mode.left_commands {
+        "Klick: bewegen/angreifen | Rechtsklick: Auswahl aufheben | Shift: anhaengen | Strg: Angriffsmarsch\nAlt: Patrouille | R: Stopp | T: Stellung halten | Strg+1-9: Gruppe speichern | L: Zweitasten".to_string()
     } else {
-        "Rechts: bewegen/angreifen | ziehen: Frontlinie | Shift: anhaengen | Strg: Angriffsmarsch\nAlt: Patrouille | R: Stopp | T: Stellung halten | Strg+1-9: Gruppe speichern".to_string()
+        "Rechts: bewegen/angreifen | ziehen: Frontlinie | Shift: anhaengen | Strg: Angriffsmarsch\nAlt: Patrouille | R: Stopp | T: Stellung halten | Strg+1-9: Gruppe speichern | L: Einknopf".to_string()
     };
     if let Ok(mut t) = texts.p2().single_mut() {
         **t = sel_text;

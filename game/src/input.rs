@@ -9,7 +9,11 @@ use bevy::core_pipeline::tonemapping::Tonemapping;
 use bevy::input::ButtonState;
 use bevy::input::mouse::{MouseButtonInput, MouseScrollUnit, MouseWheel};
 use bevy::light::{CascadeShadowConfig, CascadeShadowConfigBuilder};
+use bevy::anti_alias::smaa::Smaa;
 use bevy::post_process::bloom::Bloom;
+use bevy::post_process::dof::{DepthOfField, DepthOfFieldMode};
+use bevy::post_process::effect_stack::Vignette;
+use bevy::render::view::{ColorGrading, ColorGradingGlobal, ColorGradingSection};
 use bevy::prelude::*;
 use bevy::ui::RelativeCursorPosition;
 use bevy::window::{CursorIcon, PrimaryWindow, SystemCursorIcon};
@@ -75,8 +79,10 @@ pub enum HoverKind {
 /// Dunst-Farbe am Horizont (auch Hintergrundfarbe)
 pub const HAZE: Color = Color::srgb(0.66, 0.64, 0.60);
 
-pub fn setup_camera(mut commands: Commands) {
+pub fn setup_camera(mut commands: Commands, mut images: ResMut<Assets<Image>>) {
     commands.spawn((
+        // Himmel als Licht: Spiegelungen und richtungsabhängiges Umgebungslicht
+        crate::sky::environment_light(&mut images),
         Camera3d::default(),
         MainCamera,
         Transform::default(),
@@ -86,9 +92,46 @@ pub fn setup_camera(mut commands: Commands) {
             color: HAZE,
             directional_light_color: Color::srgba(1.0, 0.85, 0.65, 0.35),
             directional_light_exponent: 24.0,
-            falloff: FogFalloff::Linear { start: 90.0, end: 280.0 },
+            falloff: FogFalloff::Linear { start: 110.0, end: 340.0 },
+        },
+        // Kantenglättung als Nachbearbeitung: glättet auch Grashalme und Glanzlichter
+        Msaa::Off,
+        Smaa::default(),
+        color_grading(),
+        // dunkle Ränder lenken den Blick in die Bildmitte
+        Vignette { intensity: 0.42, radius: 0.85, smoothness: 3.5, ..default() },
+        // Miniatur-Look: scharf am Blickpunkt, Vorder- und Hintergrund leicht unscharf
+        DepthOfField {
+            mode: DepthOfFieldMode::Gaussian,
+            focal_distance: 55.0,
+            aperture_f_stops: TILT_SHIFT_F_STOPS,
+            max_circle_of_confusion_diameter: 10.0,
+            max_depth: 600.0,
+            ..default()
         },
     ));
+}
+
+/// Blende für die Tiefenunschärfe (kleiner = unschärfer)
+const TILT_SHIFT_F_STOPS: f32 = 0.35;
+
+/// Farbkorrektur: etwas mehr Kontrast, warme Lichter, kühle Schatten
+fn color_grading() -> ColorGrading {
+    ColorGrading {
+        global: ColorGradingGlobal { temperature: 0.04, post_saturation: 1.06, ..default() },
+        shadows: ColorGradingSection { saturation: 0.92, contrast: 1.04, lift: -0.012, ..default() },
+        midtones: ColorGradingSection { saturation: 1.05, contrast: 1.08, ..default() },
+        highlights: ColorGradingSection { saturation: 1.0, gain: 1.03, ..default() },
+    }
+}
+
+/// Schärfeebene folgt dem Blickpunkt der Kamera
+pub fn update_focus(rig: Res<CamRig>, mut q: Query<&mut DepthOfField, With<MainCamera>>) {
+    for mut dof in &mut q {
+        dof.focal_distance = rig.dist;
+        // weit herausgezoomt weniger Unschärfe, sonst wirkt alles wie Spielzeug
+        dof.aperture_f_stops = TILT_SHIFT_F_STOPS * (rig.dist / 40.0).max(1.0);
+    }
 }
 
 /// Schattenbereich an den Zoom anpassen: nah = scharfe Schatten, weit = alles im Schatten
@@ -156,7 +199,7 @@ pub fn camera_control(
     if let (Some(win), Some(c)) = (win, cursor)
         && drag.mid.is_none()
     {
-        let m = 6.0;
+        let m = 10.0;
         if c.x < m {
             dir.x -= 1.0;
         }
@@ -188,11 +231,18 @@ pub fn camera_control(
         (Some(w), Some(c)) => over_ui(w, c, ui_scale.0),
         _ => true,
     };
+    // Zoom kommt als Zeilen-Ereignis (Mausrad, Fingerspreizen), Wischen auf dem Trackpad als
+    // Pixel-Ereignis und verschiebt die Kamera. Die Zuordnung macht ein Skript in index.html.
     for ev in wheel.read() {
-        let amount = match ev.unit {
-            MouseScrollUnit::Line => ev.y * 4.0,
-            MouseScrollUnit::Pixel => ev.y * 0.08,
-        };
+        if ev.unit == MouseScrollUnit::Pixel {
+            if let Some(win) = win {
+                let k = 0.83 * rig.dist / win.height().max(1.0) / win.scale_factor().max(0.1);
+                let k_depth = k / pitch(rig.dist).sin();
+                rig.focus -= right * ev.x * k + fwd * ev.y * k_depth;
+            }
+            continue;
+        }
+        let amount = ev.y * 4.0;
         let old = rig.dist;
         rig.dist = (rig.dist - amount).clamp(20.0, 110.0);
         if !over_ui
@@ -292,6 +342,19 @@ pub fn modifiers(keys: &ButtonInput<KeyCode>) -> (bool, bool, bool) {
 
 const DOUBLE_CLICK: f64 = 0.4;
 
+/// Klassische Steuerung mit einer Taste: Linksklick wählt aus und gibt Befehle,
+/// Rechtsklick hebt die Auswahl auf. Umschalten mit L.
+#[derive(Resource, Default)]
+pub struct ClickMode {
+    pub left_commands: bool,
+}
+
+pub fn toggle_click_mode(keys: Res<ButtonInput<KeyCode>>, mut mode: ResMut<ClickMode>) {
+    if keys.just_pressed(KeyCode::KeyL) {
+        mode.left_commands = !mode.left_commands;
+    }
+}
+
 pub fn mouse_commands(
     mut commands: Commands,
     (time, mut clicks): (Res<Time>, MessageReader<MouseButtonInput>),
@@ -308,6 +371,7 @@ pub fn mouse_commands(
     ui_scale: Res<UiScale>,
     mut placing: ResMut<crate::construction::Placing>,
     mut last_click: Local<(f64, Option<Entity>)>,
+    mode: Res<ClickMode>,
 ) {
     // Im Baumodus gehören Klicks der Platzierung
     if placing.kind.is_some() || placing.block_click {
@@ -340,6 +404,10 @@ pub fn mouse_commands(
             }
         }
     };
+    // Einknopf-Modus: ein Klick ins Leere wird zum Befehl, wenn etwas Eigenes ausgewählt ist
+    let left_mode = mode.left_commands;
+    let has_selection = units.iter().any(|u| u.4 && *u.2 == PLAYER) || buildings.iter().any(|b| b.5 && b.4 && *b.2 == PLAYER);
+    let mut command_at: Option<(Vec2, Vec3)> = None;
     let deselect_buildings = |commands: &mut Commands| {
         for (e, _, _, _, _, sel) in &buildings {
             if sel {
@@ -454,6 +522,9 @@ pub fn mouse_commands(
                     *last_click = (now, None);
                     deselect_all(&mut commands);
                     commands.entity(b).insert(Selected);
+                } else if left_mode && has_selection {
+                    *last_click = (now, None);
+                    command_at = ground_point(camera, cam_t, c).map(|gp| (c, gp));
                 } else if !shift && !ctrl {
                     *last_click = (now, None);
                     deselect_all(&mut commands);
@@ -473,15 +544,25 @@ pub fn mouse_commands(
     if mouse.pressed(MouseButton::Right) && drag.right.is_some() {
         drag.right_now = cursor.and_then(|c| ground_point(camera, cam_t, c));
     }
-    if !mouse.just_released(MouseButton::Right) {
-        if !mouse.pressed(MouseButton::Right) {
-            drag.right = None;
-            drag.right_now = None;
+    let (c, gp, end) = if let Some((c, gp)) = command_at {
+        (c, gp, gp)
+    } else {
+        if !mouse.just_released(MouseButton::Right) {
+            if !mouse.pressed(MouseButton::Right) {
+                drag.right = None;
+                drag.right_now = None;
+            }
+            return;
         }
-        return;
-    }
-    let Some((c, gp)) = drag.right.take() else { return };
-    let end = drag.right_now.take().unwrap_or(gp);
+        let Some((c, gp)) = drag.right.take() else { return };
+        let end = drag.right_now.take().unwrap_or(gp);
+        // Einknopf-Modus: kurzer Rechtsklick hebt die Auswahl auf, Ziehen legt weiter eine Frontlinie
+        if left_mode && flat(end - gp).length() <= LINE_MIN {
+            deselect_all(&mut commands);
+            return;
+        }
+        (c, gp, end)
+    };
 
     let members: Vec<Member> = units
         .iter()

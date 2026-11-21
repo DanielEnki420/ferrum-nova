@@ -25,6 +25,57 @@ pub struct VehicleMeshes {
     pub wheels: Vec<(Handle<Mesh>, Vec3, f32)>,
     /// Erzladung (nur Sammler), Ursprung auf dem Bunkerboden
     pub cargo: Option<(Handle<Mesh>, Vec3)>,
+    /// Scheinwerfer und Rücklichter (unbeleuchtet gerendert, Farbe in den Vertexfarben)
+    pub lamps: Option<Handle<Mesh>>,
+    /// Rundumleuchte (nur Sammler), blinkt
+    pub beacon: Option<Handle<Mesh>>,
+    /// Lage der Einheitennummer (flach auf dem linken vorderen Kotflügel)
+    pub plate: Vec3,
+}
+
+/// Leuchtfarben (linear, über 1 für den Bloom)
+const HEADLIGHT: Vec3 = Vec3::new(6.0, 5.2, 3.6);
+const TAILLIGHT: Vec3 = Vec3::new(5.0, 0.22, 0.12);
+
+/// Rücklichter als Paar auf der Heckplatte
+fn tail_lights(g: &mut Geo, x: f32, y: f32, z: f32) {
+    for side in [-1.0f32, 1.0] {
+        g.cuboid(Vec3::new(side * x, y, z), Vec3::new(0.12, 0.06, 0.03), Quat::IDENTITY, TAILLIGHT);
+    }
+}
+
+/// Scheinwerfer und Rücklichter eines Kettenfahrzeugs (passend zu `tracked_hull`)
+fn tracked_lamps(len: f32, s: f32) -> Geo {
+    let h = len / 2.0;
+    let mut g = Geo::default();
+    for side in [-1.0f32, 1.0] {
+        g.cyl(Vec3::new(side * 0.42 * s, 0.64, -h + 0.13), 0.048, 0.02, Vec3::Z, 10, HEADLIGHT);
+    }
+    tail_lights(&mut g, 0.44 * s, 0.5, h - 0.015);
+    g
+}
+
+/// Zweistellige Nummer in Sieben-Segment-Schrift, flach liegend (Lesefluss +X, oben -Z)
+pub fn number_mesh(n: u32) -> Mesh {
+    // Segmente a b c d e f g als (Mitte x, Mitte y, waagerecht?)
+    const SEG: [(f32, f32, bool); 7] = [(0.0, 0.5, true), (0.5, 0.25, false), (0.5, -0.25, false), (0.0, -0.5, true), (-0.5, -0.25, false), (-0.5, 0.25, false), (0.0, 0.0, true)];
+    const DIGITS: [&str; 10] = ["abcdef", "bc", "abged", "abgcd", "fgbc", "afgcd", "afgedc", "abc", "abcdefg", "abcdfg"];
+    let (w, h, t) = (0.12f32, 0.22f32, 0.03f32);
+    let col = lin(Color::srgb(0.88, 0.88, 0.82));
+    let text = n.to_string();
+    let count = text.len() as f32;
+    let step = w + 0.06;
+    let mut g = Geo::default();
+    for (i, ch) in text.chars().enumerate() {
+        let cx = (i as f32 - (count - 1.0) / 2.0) * step;
+        let d = ch.to_digit(10).unwrap_or(0) as usize;
+        for c in DIGITS[d].chars() {
+            let (sx, sy, horiz) = SEG[(c as u8 - b'a') as usize];
+            let size = if horiz { Vec3::new(w, 0.006, t) } else { Vec3::new(t, 0.006, h / 2.0) };
+            g.cuboid(Vec3::new(cx + sx * w, 0.0, -sy * h), size, Quat::IDENTITY, col);
+        }
+    }
+    g.build().expect("Nummer")
 }
 
 /// Rad zum Drehen: Mesh (Achse entlang X, Mitte im Ursprung), Lage, Radius
@@ -182,11 +233,31 @@ impl Geo {
 
     /// Staub nach unten hin, leichte Fleckigkeit, Kanten etwas aufgehellt
     pub(crate) fn weather(&mut self, dust: Vec3, dust_top: f32, amount: f32) {
-        for (p, c) in self.pos.iter().zip(self.col.iter_mut()) {
+        let hash = |x: f32| ((x.sin() * 43_758.547).fract()).abs();
+        for ((p, n), c) in self.pos.iter().zip(self.nrm.iter()).zip(self.col.iter_mut()) {
             let v = Vec3::from_array(*p);
-            let h = ((v.x * 12.9898 + v.y * 78.233 + v.z * 37.719).sin() * 43_758.547).fract().abs();
+            let nrm = Vec3::from_array(*n);
+            let h = hash(v.x * 12.9898 + v.y * 78.233 + v.z * 37.719);
             let mut col = Vec3::new(c[0], c[1], c[2]);
             col *= 0.9 + 0.14 * h;
+            // großflächiger Schmutz: weiche Flecken
+            let grime = crate::terrain::fbm(v.x * 2.3 + v.y * 1.7, v.z * 2.3 - v.y * 1.1, 913, 3) * 0.5 + 0.5;
+            col *= 1.0 - 0.16 * crate::terrain::smoothstep(0.45, 0.8, grime);
+            if nrm.y.abs() < 0.35 {
+                // senkrechte Flächen: Laufspuren von Regen und Öl, schmale Streifen
+                let tangent = nrm.cross(Vec3::Y).normalize_or_zero();
+                let lane = (v.dot(tangent) * 11.0).floor();
+                let streak = hash(lane * 7.31 + 1.7);
+                if streak > 0.72 {
+                    col *= 0.8 + 0.12 * hash(lane * 3.1);
+                }
+            } else if nrm.y > 0.7 {
+                // Oberseiten: abgewetzter Lack, hell und metallisch
+                let scuff = crate::terrain::fbm(v.x * 6.0, v.z * 6.0, 421, 2) * 0.5 + 0.5;
+                if scuff > 0.68 {
+                    col = col.lerp(Vec3::splat(0.32), 0.35);
+                }
+            }
             let k = if dust_top > 0.0 { (1.0 - (v.y / dust_top).clamp(0.0, 1.0)).powf(1.5) * amount } else { 0.0 };
             col = col.lerp(dust, k);
             *c = [col.x, col.y, col.z, 1.0];
@@ -358,10 +429,7 @@ pub fn build_panzer(team: Team, meshes: &mut Assets<Mesh>) -> VehicleMeshes {
     tracked_hull(&mut hull, &p, len, 0.84, 1.0);
     hull.weather(p.dust, 0.9, 0.55);
 
-    let mut hglow = Geo::default();
-    for side in [-1.0f32, 1.0] {
-        hglow.cyl(Vec3::new(side * 0.42, 0.64, -len / 2.0 + 0.13), 0.045, 0.02, Vec3::Z, 10, Vec3::ONE);
-    }
+    let lamps = tracked_lamps(len, 1.0);
 
     // Turm: keilförmiger Grundriss mit schrägen Wänden. Ursprung = Drehpunkt (y 0.86, z 0.1 in der Wanne)
     let mut tur = Geo::default();
@@ -428,12 +496,15 @@ pub fn build_panzer(team: Team, meshes: &mut Assets<Mesh>) -> VehicleMeshes {
 
     VehicleMeshes {
         hull: finish(hull, meshes).expect("Wanne"),
-        hull_glow: finish(hglow, meshes),
+        hull_glow: None,
         glass: None,
         turret: finish(tur, meshes),
         turret_glow: finish(tglow, meshes),
         wheels: finish_wheels(spin, meshes),
         cargo: None,
+        lamps: finish(lamps, meshes),
+        beacon: None,
+        plate: Vec3::new(-0.74, 0.745, -1.0),
     }
 }
 
@@ -467,6 +538,7 @@ pub fn build_werfer(team: Team, meshes: &mut Assets<Mesh>) -> VehicleMeshes {
 
     let mut hglow = Geo::default();
     hglow.cuboid(Vec3::new(0.0, 1.21, -0.75), Vec3::new(0.5, 0.03, 0.06), Quat::IDENTITY, Vec3::ONE);
+    let lamps = tracked_lamps(len, 1.0);
 
     // Werfer: Ursprung = Drehpunkt (y 1.05, z 0.25), wird um `tilt` angehoben
     let mut tur = Geo::default();
@@ -513,6 +585,9 @@ pub fn build_werfer(team: Team, meshes: &mut Assets<Mesh>) -> VehicleMeshes {
         turret_glow: finish(tglow, meshes),
         wheels: finish_wheels(spin, meshes),
         cargo: None,
+        lamps: finish(lamps, meshes),
+        beacon: None,
+        plate: Vec3::new(-0.74, 0.745, -0.8),
     }
 }
 
@@ -582,10 +657,15 @@ pub fn build_sammler(team: Team, meshes: &mut Assets<Mesh>) -> VehicleMeshes {
     }
 
     let mut glow = Geo::default();
-    for side in [-1.0f32, 1.0] {
-        glow.cyl(Vec3::new(side * 0.45, 0.85, -1.34), 0.07, 0.02, Vec3::Z, 10, Vec3::ONE);
-    }
     glow.cuboid(Vec3::new(0.0, 1.47, -0.85), Vec3::new(0.6, 0.05, 0.08), Quat::IDENTITY, Vec3::ONE);
+    let mut lamps = Geo::default();
+    for side in [-1.0f32, 1.0] {
+        lamps.cyl(Vec3::new(side * 0.45, 0.85, -1.34), 0.07, 0.02, Vec3::Z, 10, HEADLIGHT);
+    }
+    tail_lights(&mut lamps, 0.4, 0.5, 1.41);
+    // Rundumleuchte auf dem Fahrerhausdach
+    let mut beacon = Geo::default();
+    beacon.cyl(Vec3::new(0.38, 1.5, -0.65), 0.06, 0.09, Vec3::Y, 10, Vec3::ONE);
 
     VehicleMeshes {
         hull: finish(hull, meshes).expect("Wanne"),
@@ -595,6 +675,9 @@ pub fn build_sammler(team: Team, meshes: &mut Assets<Mesh>) -> VehicleMeshes {
         turret_glow: None,
         wheels: finish_wheels(spin, meshes),
         cargo: finish(ore, meshes).map(|m| (m, Vec3::new(0.0, 0.67, 0.52))),
+        lamps: finish(lamps, meshes),
+        beacon: finish(beacon, meshes),
+        plate: Vec3::new(-0.72, 0.765, -0.85),
     }
 }
 
@@ -648,10 +731,11 @@ pub fn build_spaeher(team: Team, meshes: &mut Assets<Mesh>) -> VehicleMeshes {
     // Sehschlitze vorn
     let mut glass = Geo::default();
     glass.cuboid(Vec3::new(0.0, 0.92, -1.3), Vec3::new(0.6, 0.07, 0.02), Quat::from_rotation_x(-0.42), Vec3::ONE);
-    let mut hglow = Geo::default();
+    let mut lamps = Geo::default();
     for side in [-1.0f32, 1.0] {
-        hglow.cyl(Vec3::new(side * 0.35, 0.83, -1.465), 0.045, 0.02, Vec3::new(0.0, 0.45, -1.0), 10, Vec3::ONE);
+        lamps.cyl(Vec3::new(side * 0.35, 0.83, -1.465), 0.048, 0.02, Vec3::new(0.0, 0.45, -1.0), 10, HEADLIGHT);
     }
+    tail_lights(&mut lamps, 0.42, 0.7, 1.6);
 
     // Turm: achteckig, flach, Maschinenkanone mit Mündungsbremse
     let mut tur = Geo::default();
@@ -676,12 +760,15 @@ pub fn build_spaeher(team: Team, meshes: &mut Assets<Mesh>) -> VehicleMeshes {
 
     VehicleMeshes {
         hull: finish(hull, meshes).expect("Wanne"),
-        hull_glow: finish(hglow, meshes),
+        hull_glow: None,
         glass: finish(glass, meshes),
         turret: finish(tur, meshes),
         turret_glow: finish(tglow, meshes),
         wheels: finish_wheels(spin, meshes),
         cargo: None,
+        lamps: finish(lamps, meshes),
+        beacon: None,
+        plate: Vec3::new(-0.78, 0.925, -0.95),
     }
 }
 
@@ -712,10 +799,7 @@ pub fn build_bollwerk(team: Team, meshes: &mut Assets<Mesh>) -> VehicleMeshes {
         hull.cuboid(Vec3::new(side, 0.42, -len / 2.0 - 0.1), Vec3::new(0.08, 0.08, 0.35), Quat::IDENTITY, p.steel_dark);
     }
     hull.weather(p.dust, 1.0, 0.55);
-    let mut hglow = Geo::default();
-    for side in [-1.0f32, 1.0] {
-        hglow.cyl(Vec3::new(side * 0.55, 0.64, -len / 2.0 + 0.13), 0.05, 0.02, Vec3::Z, 10, Vec3::ONE);
-    }
+    let lamps = tracked_lamps(len, 1.3);
 
     // Turm: wie beim Panzer, aber größer, mit Zusatzpanzer und Dach-MG
     let mut tur = Geo::default();
@@ -775,12 +859,15 @@ pub fn build_bollwerk(team: Team, meshes: &mut Assets<Mesh>) -> VehicleMeshes {
 
     VehicleMeshes {
         hull: finish(hull, meshes).expect("Wanne"),
-        hull_glow: finish(hglow, meshes),
+        hull_glow: None,
         glass: None,
         turret: finish(tur, meshes),
         turret_glow: finish(tglow, meshes),
         wheels: finish_wheels(spin, meshes),
         cargo: None,
+        lamps: finish(lamps, meshes),
+        beacon: None,
+        plate: Vec3::new(-0.962, 0.745, -1.35),
     }
 }
 
@@ -813,6 +900,7 @@ pub fn build_haubitze(team: Team, meshes: &mut Assets<Mesh>) -> VehicleMeshes {
     glass.cuboid(Vec3::new(0.0, 1.03, -1.41), Vec3::new(0.8, 0.14, 0.02), Quat::from_rotation_x(-0.3), Vec3::ONE);
     let mut hglow = Geo::default();
     hglow.cuboid(Vec3::new(0.0, 1.17, -1.15), Vec3::new(0.5, 0.03, 0.06), Quat::IDENTITY, Vec3::ONE);
+    let lamps = tracked_lamps(len, 1.0);
 
     // Geschütz: Drehpunkt (y 0.98, z 0.45), angehoben um 0.42 rad
     let mut gun = Geo::default();
@@ -852,6 +940,9 @@ pub fn build_haubitze(team: Team, meshes: &mut Assets<Mesh>) -> VehicleMeshes {
         turret_glow: finish(gglow, meshes),
         wheels: finish_wheels(spin, meshes),
         cargo: None,
+        lamps: finish(lamps, meshes),
+        beacon: None,
+        plate: Vec3::new(-0.74, 0.745, -1.05),
     }
 }
 

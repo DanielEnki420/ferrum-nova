@@ -5,6 +5,7 @@ import bevy_pbr::render::{
     pbr_fragment::pbr_input_from_standard_material,
     forward_io::{VertexOutput, FragmentOutput},
     pbr_functions::{apply_pbr_lighting, main_pass_post_lighting_processing},
+    mesh_view_bindings::globals,
 };
 
 struct TerrainParams {
@@ -69,6 +70,29 @@ fn triplanar(p: vec3<f32>, n: vec3<f32>, i: i32) -> Layer {
     return l;
 }
 
+// Wolkenschatten: weiches Rauschen, das mit dem Wind über die Karte zieht
+fn cloud_hash(p: vec2<f32>) -> f32 {
+    return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453);
+}
+
+fn cloud_noise(p: vec2<f32>) -> f32 {
+    let i = floor(p);
+    let f = fract(p);
+    let u = f * f * (3.0 - 2.0 * f);
+    let a = cloud_hash(i);
+    let b = cloud_hash(i + vec2(1.0, 0.0));
+    let c = cloud_hash(i + vec2(0.0, 1.0));
+    let d = cloud_hash(i + vec2(1.0, 1.0));
+    return mix(mix(a, b, u.x), mix(c, d, u.x), u.y);
+}
+
+// 0 = Sonne, 1 = voller Wolkenschatten
+fn cloud_shadow(xz: vec2<f32>, t: f32) -> f32 {
+    let p = xz * 0.013 + vec2(t * 0.030, t * 0.0165);
+    let n = cloud_noise(p) * 0.55 + cloud_noise(p * 2.1 + vec2(3.7, 1.9)) * 0.3 + cloud_noise(p * 4.3 - vec2(1.3, 5.1)) * 0.15;
+    return smoothstep(0.50, 0.68, n);
+}
+
 fn luma(c: vec3<f32>) -> f32 {
     return dot(c, vec3(0.2126, 0.7152, 0.0722));
 }
@@ -116,11 +140,22 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
     albedo = mix(vec3(luma(albedo)), albedo, 0.78);
     // Mikroschatten der Textur auch im direkten Licht andeuten
     albedo = albedo * mix(0.75, 1.0, ao);
+    // Fahrspuren auf den Wegen: zwei dunkle, glattgefahrene Rillen (uv_b.x = Abstand zur Wegmitte)
+    let track = in.uv_b.y;
+    let rut = 1.0 - smoothstep(0.14, 0.38, abs(abs(in.uv_b.x) - 0.95));
+    let ruts = rut * track;
+    albedo = albedo * mix(1.0, 0.74, ruts);
+    // Mittelstreifen etwas heller, verdichteter Staub
+    albedo = albedo * mix(1.0, 1.08, track * (1.0 - smoothstep(0.2, 0.6, abs(in.uv_b.x))));
+
+    // ziehende Wolkenschatten
+    albedo = albedo * mix(1.0, 0.58, cloud_shadow(p.xz, globals.time));
 
     pbr_input.material.base_color = vec4(albedo, 1.0);
-    pbr_input.material.perceptual_roughness = clamp(rough, 0.35, 1.0);
+    pbr_input.material.perceptual_roughness = clamp(mix(rough, 0.55, ruts), 0.35, 1.0);
     pbr_input.diffuse_occlusion = pbr_input.diffuse_occlusion * mix(1.0, ao, 0.8);
-    pbr_input.N = normalize(gn + bump * params.normal_strength);
+    // in den Rillen ist die Bodenstruktur glattgefahren
+    pbr_input.N = normalize(gn + bump * params.normal_strength * mix(1.0, 0.4, ruts));
 
     var out: FragmentOutput;
     out.color = apply_pbr_lighting(pbr_input);

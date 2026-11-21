@@ -5,6 +5,7 @@ use crate::components::*;
 use crate::buildings::{self, HqMeshes, Spin, StructMeshes};
 use crate::vehicles::{self, VehicleMeshes};
 use bevy::prelude::*;
+use std::sync::atomic::{AtomicU32, Ordering};
 
 #[derive(Resource)]
 pub struct ModelKit {
@@ -33,7 +34,17 @@ pub struct ModelKit {
     pub structures: [[StructMeshes; 2]; 3],
     /// Bauvorschau: gültiger und ungültiger Platz
     pub ghost: [Handle<StandardMaterial>; 2],
+    /// Lampen und Fenster: unbeleuchtet, Helligkeit in den Vertexfarben
+    pub lamp: Handle<StandardMaterial>,
+    /// Bernsteinfarbene Rundumleuchte, blinkt
+    pub beacon: Handle<StandardMaterial>,
+    /// Einheitennummern 1..=99
+    pub numbers: Vec<Handle<Mesh>>,
 }
+
+/// Fortlaufende Einheitennummern je Team
+static NEXT_NUMBER: [AtomicU32; 2] = [AtomicU32::new(0), AtomicU32::new(0)];
+const BEACON: LinearRgba = LinearRgba::rgb(9.0, 3.6, 0.4);
 
 impl ModelKit {
     pub fn new(meshes: &mut Assets<Mesh>, mats: &mut Assets<StandardMaterial>) -> Self {
@@ -125,6 +136,9 @@ impl ModelKit {
                 ghost(mats, Color::srgba(0.35, 1.0, 0.5, 0.38)),
                 ghost(mats, Color::srgba(1.0, 0.28, 0.22, 0.38)),
             ],
+            lamp: mats.add(StandardMaterial { unlit: true, ..default() }),
+            beacon: mats.add(StandardMaterial { base_color: Color::LinearRgba(BEACON), unlit: true, ..default() }),
+            numbers: (1..=99).map(|n| meshes.add(vehicles::number_mesh(n))).collect(),
         }
     }
 }
@@ -147,6 +161,9 @@ pub fn build_structure(c: &mut Commands, k: &ModelKit, pivot: Entity, team: Team
     part(c, pivot, &sm.body, body_mat, Transform::default());
     if ghost.is_none() {
         part(c, pivot, &sm.glow, &k.glow[t], Transform::default());
+        if let Some(m) = &sm.lamps {
+            part(c, pivot, m, &k.lamp, Transform::default());
+        }
         if let Some(m) = &sm.glass {
             part(c, pivot, m, &k.glass, Transform::default());
         }
@@ -190,6 +207,14 @@ pub fn build_unit(c: &mut Commands, k: &ModelKit, root: Entity, team: Team, kind
     if let Some(m) = &vm.glass {
         part(c, root, m, &k.glass, Transform::default());
     }
+    if let Some(m) = &vm.lamps {
+        part(c, root, m, &k.lamp, Transform::default());
+    }
+    if let Some(m) = &vm.beacon {
+        part(c, root, m, &k.beacon, Transform::default());
+    }
+    let n = NEXT_NUMBER[t].fetch_add(1, Ordering::Relaxed) % 99;
+    part(c, root, &k.numbers[n as usize], &k.vehicle_mat, Transform::from_translation(vm.plate));
     for (m, pos, r) in &vm.wheels {
         let w = part(c, root, m, &k.vehicle_mat, Transform::from_translation(*pos));
         c.entity(w).insert(Wheel { radius: *r });
@@ -223,6 +248,7 @@ pub fn build_hq(c: &mut Commands, k: &ModelKit, root: Entity, team: Team) {
     part(c, root, &hq.body, &k.building_mat, Transform::default());
     part(c, root, &hq.glow, &k.glow[t], Transform::default());
     part(c, root, &hq.glass, &k.glass, Transform::default());
+    part(c, root, &hq.lamps, &k.lamp, Transform::default());
     let dish = part(c, root, &hq.dish, &k.building_mat, Transform::from_translation(hq.dish_pos));
     c.entity(dish).insert(Spin(1.2));
     let light = c
@@ -251,5 +277,15 @@ pub fn pulse_lights(time: Res<Time>, mut q: Query<(&Pulse, &mut PointLight)>) {
     let t = time.elapsed_secs();
     for (p, mut l) in &mut q {
         l.intensity = p.base * (0.75 + 0.25 * (t * 2.1 + p.phase).sin() + 0.08 * (t * 7.3 + p.phase).sin());
+    }
+}
+
+/// Rundumleuchte: kurzes, kräftiges Aufblitzen etwa einmal pro Sekunde
+pub fn pulse_beacons(time: Res<Time>, kit: Option<Res<ModelKit>>, mut mats: ResMut<Assets<StandardMaterial>>) {
+    let Some(kit) = kit else { return };
+    let phase = (time.elapsed_secs() * 1.1).fract();
+    let k = 0.15 + 0.85 * (1.0 - (phase * 2.0 - 0.5).abs() * 2.0).clamp(0.0, 1.0).powi(2);
+    if let Some(mut m) = mats.get_mut(&kit.beacon) {
+        m.base_color = Color::LinearRgba(BEACON * k);
     }
 }
