@@ -110,6 +110,89 @@ pub struct Building {
     pub radius: f32,
 }
 
+/// Baubare Gebäude (das HQ steht von Anfang an)
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum BuildingKind {
+    Geschuetzturm,
+    Raffinerie,
+    Fabrik,
+}
+
+impl BuildingKind {
+    pub fn idx(self) -> usize {
+        self as usize
+    }
+    pub fn name(self) -> &'static str {
+        match self {
+            BuildingKind::Geschuetzturm => "Geschuetzturm",
+            BuildingKind::Raffinerie => "Raffinerie",
+            BuildingKind::Fabrik => "Fabrik",
+        }
+    }
+    pub fn short_name(self) -> &'static str {
+        match self {
+            BuildingKind::Geschuetzturm => "Geschuetz",
+            k => k.name(),
+        }
+    }
+    /// Kosten: (Ferrit, Plasma)
+    pub fn cost(self) -> [u32; 2] {
+        match self {
+            BuildingKind::Geschuetzturm => [120, 40],
+            BuildingKind::Raffinerie => [150, 0],
+            BuildingKind::Fabrik => [200, 80],
+        }
+    }
+    pub fn build_time(self) -> f32 {
+        match self {
+            BuildingKind::Geschuetzturm => 12.0,
+            BuildingKind::Raffinerie => 15.0,
+            BuildingKind::Fabrik => 20.0,
+        }
+    }
+    pub fn hp(self) -> f32 {
+        match self {
+            BuildingKind::Geschuetzturm => 700.0,
+            BuildingKind::Raffinerie => 900.0,
+            BuildingKind::Fabrik => 1100.0,
+        }
+    }
+    /// Kollisionsradius
+    pub fn radius(self) -> f32 {
+        match self {
+            BuildingKind::Geschuetzturm => 1.9,
+            BuildingKind::Raffinerie => 3.3,
+            BuildingKind::Fabrik => 3.9,
+        }
+    }
+}
+
+/// Ein gebautes Gebäude dieses Typs
+#[derive(Component)]
+pub struct Structure(pub BuildingKind);
+
+/// Gebäude im Bau (Fortschritt 0..1). Es wächst aus dem Boden und ist noch ohne Funktion.
+#[derive(Component)]
+pub struct Construction {
+    pub progress: f32,
+    pub dust: f32,
+}
+
+/// Abladestelle für Sammler (HQ und Raffinerie)
+#[derive(Component)]
+pub struct Depot;
+
+/// Verweis auf den Knoten, an dem das Modell hängt (er steckt beim Bau im Boden)
+#[derive(Component)]
+pub struct RisePivot {
+    pub entity: Entity,
+    pub depth: f32,
+}
+
+/// Drehbarer Geschützkopf eines Gebäudes
+#[derive(Component)]
+pub struct GunHead;
+
 #[derive(Component)]
 pub struct Hq {
     pub queue: Vec<UnitKind>,

@@ -7,6 +7,7 @@
 mod ai;
 mod buildings;
 mod components;
+mod construction;
 mod fx;
 mod hud;
 mod input;
@@ -52,18 +53,26 @@ fn main() {
         .init_resource::<input::CamRig>()
         .init_resource::<input::DragState>()
         .init_resource::<ai::AiState>()
+        .init_resource::<construction::Placing>()
         .add_message::<units::BuildRequest>()
+        .add_message::<construction::PlaceRequest>()
         .add_message::<fx::FxEvent>()
         .add_systems(Startup, (world::setup_world, input::setup_camera, hud::setup_hud, hud::setup_perf, splat::load_terrain_textures, vegetation::setup_vegetation))
         .add_systems(
             Update,
-            (
+            ((
                 input::camera_control,
+                construction::placement_input,
                 input::mouse_commands,
                 input::select_army,
                 hud::build_hotkeys,
                 ai::enemy_ai,
                 units::enqueue_builds,
+                construction::place_buildings,
+                construction::construct,
+            )
+                .chain(),
+            (
                 units::snapshot,
                 units::auto_target,
                 units::combat,
@@ -71,11 +80,14 @@ fn main() {
                 units::separation,
                 units::ground_snap,
                 units::turret_aim,
+                construction::structure_aim,
                 units::harvest,
                 units::projectiles,
                 units::production,
                 units::deaths,
                 units::check_outcome,
+            )
+                .chain(),
             )
                 .chain()
                 .run_if(|o: Res<Outcome>| *o == Outcome::Running),

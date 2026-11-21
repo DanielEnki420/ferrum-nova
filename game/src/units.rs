@@ -52,7 +52,7 @@ pub fn snapshot(
 pub fn auto_target(
     mut commands: Commands,
     snap: Res<Snapshot>,
-    q: Query<(Entity, &Weapon, &Team, Has<MoveTo>, Has<AttackMove>), Without<AttackTarget>>,
+    q: Query<(Entity, &Weapon, &Team, Has<MoveTo>, Has<AttackMove>), (Without<AttackTarget>, Without<Construction>)>,
 ) {
     for (e, w, team, moving, amove) in &q {
         if moving && !amove {
@@ -88,7 +88,7 @@ pub fn combat(
     snap: Res<Snapshot>,
     kit: Res<ModelKit>,
     mut fx: MessageWriter<FxEvent>,
-    mut q: Query<(Entity, &mut Weapon, &AttackTarget, &Team, &Transform, &Unit)>,
+    mut q: Query<(Entity, &mut Weapon, &AttackTarget, &Team, &Transform, Option<&Unit>), Without<Construction>>,
 ) {
     let dt = time.delta_secs();
     for (e, mut w, target, team, t, unit) in &mut q {
@@ -99,12 +99,21 @@ pub fn combat(
         };
         let to = flat(tgt.pos - t.translation);
         let dist = to.length() - tgt.radius;
+        // Geschütztürme können nicht nachfahren: Ziel außer Reichweite aufgeben
+        if unit.is_none() && dist > w.range + 1.0 {
+            commands.entity(e).remove::<AttackTarget>();
+            continue;
+        }
         if dist > w.range || w.timer > 0.0 {
             continue;
         }
         w.timer = w.cooldown;
         let dir = to.normalize_or_zero();
-        let (muzzle_len, muzzle_h) = if unit.kind == UnitKind::Werfer { (1.0, 1.5) } else { (2.2, 1.05) };
+        let (muzzle_len, muzzle_h) = match unit.map(|u| u.kind) {
+            Some(UnitKind::Werfer) => (1.0, 1.5),
+            Some(_) => (2.2, 1.05),
+            None => (3.2, 2.1),
+        };
         let from = t.translation + Vec3::Y * muzzle_h + dir * muzzle_len;
         let vel = (aim_point(tgt) - from).normalize_or_zero();
         let t_idx = team.0 as usize;
@@ -252,11 +261,17 @@ pub fn harvest(
     mut stock: ResMut<Stock>,
     mut harvesters: Query<(Entity, &mut Harvester, &Transform, &Team, Has<MoveTo>), Without<ResourceNode>>,
     mut nodes: Query<(Entity, &Transform, &mut ResourceNode)>,
+    depots: Query<(&Transform, &Team, &Building), (With<Depot>, Without<Construction>)>,
 ) {
     let dt = time.delta_secs();
     for (e, mut h, t, team, moving) in &mut harvesters {
         let me = flat(t.translation);
-        let hq = if *team == PLAYER { PLAYER_HQ_POS } else { ENEMY_HQ_POS };
+        // Nächste eigene Abladestelle (HQ oder Raffinerie)
+        let depot = depots
+            .iter()
+            .filter(|(_, dt, _)| *dt == team)
+            .map(|(dt, _, b)| (flat(dt.translation), b.radius))
+            .min_by(|a, b| a.0.distance(me).total_cmp(&b.0.distance(me)));
         match h.state {
             HarvestState::Idle => {
                 if moving {
@@ -331,13 +346,14 @@ pub fn harvest(
                 h.state = HarvestState::Returning;
             }
             HarvestState::Returning => {
-                if me.distance(flat(hq)) < 6.6 {
+                let Some((dp, dr)) = depot else { continue };
+                if me.distance(dp) < dr + 1.8 {
                     stock.0[team.0 as usize][h.cargo_kind.idx()] += h.cargo;
                     h.cargo = 0;
                     commands.entity(e).remove::<MoveTo>();
                     h.state = if h.node.is_some() { HarvestState::ToNode } else { HarvestState::Idle };
                 } else {
-                    commands.entity(e).insert(MoveTo(hq));
+                    commands.entity(e).insert(MoveTo(dp));
                 }
             }
         }
@@ -386,9 +402,10 @@ pub fn projectiles(
 pub fn deaths(
     mut commands: Commands,
     mut fx: MessageWriter<FxEvent>,
-    q: Query<(Entity, &Health, &Transform, Has<Building>, Option<&Unit>, Option<&Team>)>,
+    q: Query<(Entity, &Health, &Transform, Option<&Building>, Option<&Unit>, Option<&Team>)>,
 ) {
     for (e, h, t, building, unit, team) in &q {
+        let building = building.is_some_and(|b| b.radius > 2.5);
         if h.hp <= 0.0 {
             let wreck = unit.zip(team).map(|(u, team)| crate::fx::WreckInfo { kind: u.kind, team: *team, rot: t.rotation });
             fx.write(FxEvent::Death { pos: t.translation, big: building, wreck });
@@ -438,18 +455,25 @@ pub fn enqueue_builds(
     }
 }
 
+/// Jede fertige Fabrik beschleunigt die Produktion um 40 % (höchstens drei zählen)
+pub fn production_rate(factories: usize) -> f32 {
+    1.0 + 0.4 * factories.min(3) as f32
+}
+
 pub fn production(
     mut commands: Commands,
     time: Res<Time>,
     kit: Res<ModelKit>,
     mut hqs: Query<(&Team, &mut Hq, &Transform)>,
+    factories: Query<(&Team, &Structure), Without<Construction>>,
 ) {
     for (team, mut hq, t) in &mut hqs {
+        let n = factories.iter().filter(|(ft, s)| *ft == team && s.0 == BuildingKind::Fabrik).count();
         let Some(&kind) = hq.queue.first() else {
             hq.progress = 0.0;
             continue;
         };
-        hq.progress += time.delta_secs();
+        hq.progress += time.delta_secs() * production_rate(n);
         if hq.progress >= kind.build_time() {
             hq.progress = 0.0;
             hq.queue.remove(0);

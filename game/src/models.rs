@@ -2,7 +2,7 @@
 //! Vorne ist bei allen Modellen -Z, der Ursprung liegt auf dem Boden.
 
 use crate::components::*;
-use crate::buildings::{self, HqMeshes, Spin};
+use crate::buildings::{self, HqMeshes, Spin, StructMeshes};
 use crate::vehicles::{self, VehicleMeshes};
 use bevy::prelude::*;
 
@@ -27,6 +27,10 @@ pub struct ModelKit {
     pub hq: [HqMeshes; 2],
     /// Beton und Bauteile der Gebäude (Farbe aus den Vertexfarben)
     pub building_mat: Handle<StandardMaterial>,
+    /// Baubare Gebäude je Typ (Geschützturm, Raffinerie, Fabrik) und Team
+    pub structures: [[StructMeshes; 2]; 3],
+    /// Bauvorschau: gültiger und ungültiger Platz
+    pub ghost: [Handle<StandardMaterial>; 2],
 }
 
 impl ModelKit {
@@ -100,8 +104,53 @@ impl ModelKit {
                 reflectance: 0.35,
                 ..default()
             }),
+            structures: [
+                [buildings::build_turret(PLAYER, meshes), buildings::build_turret(ENEMY, meshes)],
+                [buildings::build_refinery(PLAYER, meshes), buildings::build_refinery(ENEMY, meshes)],
+                [buildings::build_factory(PLAYER, meshes), buildings::build_factory(ENEMY, meshes)],
+            ],
+            ghost: [
+                ghost(mats, Color::srgba(0.35, 1.0, 0.5, 0.38)),
+                ghost(mats, Color::srgba(1.0, 0.28, 0.22, 0.38)),
+            ],
         }
     }
+}
+
+fn ghost(mats: &mut Assets<StandardMaterial>, c: Color) -> Handle<StandardMaterial> {
+    mats.add(StandardMaterial {
+        base_color: c,
+        alpha_mode: AlphaMode::Blend,
+        unlit: true,
+        ..default()
+    })
+}
+
+/// Baubares Gebäude an `pivot` anhängen. Gibt den Geschützkopf zurück, falls vorhanden.
+/// Mit `ghost` wird alles im Vorschau-Material gezeichnet (nur Baukörper und Kopf).
+pub fn build_structure(c: &mut Commands, k: &ModelKit, pivot: Entity, team: Team, kind: BuildingKind, ghost: Option<&Handle<StandardMaterial>>) -> Option<Entity> {
+    let t = team.0 as usize;
+    let sm = &k.structures[kind.idx()][t];
+    let body_mat = ghost.unwrap_or(&k.building_mat);
+    part(c, pivot, &sm.body, body_mat, Transform::default());
+    if ghost.is_none() {
+        part(c, pivot, &sm.glow, &k.glow[t], Transform::default());
+        if let Some(m) = &sm.glass {
+            part(c, pivot, m, &k.glass, Transform::default());
+        }
+        if let Some((m, pos)) = &sm.spin {
+            let fan = part(c, pivot, m, &k.building_mat, Transform::from_translation(*pos));
+            c.entity(fan).insert(Spin(9.0));
+        }
+    }
+    let (head, head_glow, pos) = sm.head.as_ref()?;
+    let h = c.spawn((Transform::from_translation(*pos), Visibility::default(), GunHead)).id();
+    c.entity(pivot).add_child(h);
+    part(c, h, head, body_mat, Transform::default());
+    if ghost.is_none() {
+        part(c, h, head_glow, &k.glow[t], Transform::default());
+    }
+    Some(h)
 }
 
 /// Ein Bauteil als Kind von `parent`

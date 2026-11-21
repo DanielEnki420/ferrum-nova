@@ -194,7 +194,7 @@ fn pick(
     best.map(|(e, _)| e)
 }
 
-fn over_ui(win: &Window, c: Vec2, scale: f32) -> bool {
+pub fn over_ui(win: &Window, c: Vec2, scale: f32) -> bool {
     c.y < TOP_BAR_H * scale || c.y > win.height() - BOTTOM_PANEL_H * scale
 }
 
@@ -213,7 +213,14 @@ pub fn mouse_commands(
     mut harvesters: Query<&mut Harvester>,
     mut sel_box: Query<(&mut Node, &mut Visibility), With<SelectionBox>>,
     ui_scale: Res<UiScale>,
+    mut placing: ResMut<crate::construction::Placing>,
 ) {
+    // Im Baumodus gehören Klicks der Platzierung
+    if placing.kind.is_some() || placing.block_click {
+        placing.block_click = false;
+        drag.start = None;
+        return;
+    }
     let Ok(win) = window.single() else { return };
     let Ok((camera, cam_t)) = cam.single() else { return };
     let cursor = win.cursor_position();
@@ -374,7 +381,7 @@ pub fn draw_overlays(
         }
         let frac = (hp.hp / hp.max).clamp(0.0, 1.0);
         if sel || frac < 0.999 {
-            let height = if bld.is_some() { 8.2 } else { 2.6 };
+            let height = bld.map_or(2.6, |b| 2.0 + b.radius * 1.3);
             let w = r * 1.6;
             let start = pos + Vec3::Y * height - right * w * 0.5;
             let col = if *team == PLAYER {

@@ -37,6 +37,8 @@ pub enum FxEvent {
     Impact { pos: Vec3, rocket: bool },
     Death { pos: Vec3, big: bool, wreck: Option<WreckInfo> },
     Puff { pos: Vec3, dark: bool },
+    /// Staubwolke beim Baubeginn und bei Fertigstellung eines Gebäudes
+    BuildDust { pos: Vec3, radius: f32 },
 }
 
 /// Aussehen eines Partikels (Index in die Materialtabelle)
@@ -513,6 +515,9 @@ pub fn spawn_effects(
                 if let Some(w) = wreck {
                     spawn_wreck(s.c, &kit, &models, s.rng, pos, w);
                 }
+            }
+            FxEvent::BuildDust { pos, radius } => {
+                s.dust_ring(pos, 14, radius * 1.1, radius * 0.9);
             }
             FxEvent::Puff { pos, dark } => {
                 let look = if dark { Look::SmokeDark } else { Look::SmokeLight };

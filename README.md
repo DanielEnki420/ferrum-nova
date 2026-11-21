@@ -53,7 +53,11 @@ cd web && npx astro preview
 
 - Zwei Rohstoffe: Ferrit (Kristalle) und Plasma (Quellen). Die Sammler fahren selbst zum knapperen Rohstoff.
 - Drei Einheiten: Sammler, Panzer, Raketenwerfer. Gebaut werden sie im HQ über die Tasten 1–3 oder die Knöpfe.
-- Gegner-KI (Vaar-Schwarm): baut eine Wirtschaft auf und greift ab etwa 2,5 Minuten in immer größeren Wellen an.
+- Drei baubare Gebäude (Tasten 4–6 oder Knöpfe). Eine durchscheinende Vorschau zeigt, ob der Platz passt: in Reichweite eigener Gebäude, auf ebenem Boden, mit Abstand zu Gebäuden und Rohstofffeldern. Linksklick baut, mit Shift mehrere, Rechtsklick oder Esc bricht ab. Das Gebäude wächst dann aus dem Boden und arbeitet erst, wenn es fertig ist.
+  - **Geschützturm** (120 F / 40 P): Betonsockel mit Brüstung, Drehkopf mit Zwillingsrohren. Verteidigt die Basis selbstständig.
+  - **Raffinerie** (150 F / 0 P): Halle, zwei Silos auf Stelzen, Abladebucht mit Förderband. Sammler liefern an der nächsten Abladestelle ab, das verkürzt ihre Wege.
+  - **Fabrik** (200 F / 80 P): Halle mit Sheddach, Portalkran und Kühlaggregat. Jede Fabrik beschleunigt die Produktion im HQ um 40 % (bis zu drei zählen).
+- Gegner-KI (Vaar-Schwarm): baut eine Wirtschaft auf, errichtet eine Raffinerie, Geschütztürme zur Front und später eine Fabrik und greift ab etwa 2,5 Minuten in immer größeren Wellen an.
 - Sieg: feindliches HQ zerstört. Niederlage: eigenes HQ verloren.
 - Grafik:
   - **Gelände:** Relief mit Bergen am Kartenrand. Ein eigener Splat-Shader (`game/assets/shaders/terrain.wesl`) mischt vier echte Bodentexturen (Erde, Geröll, Fels, Gras; CC0, siehe [CREDITS.md](CREDITS.md)) höhenbasiert. Fels liegt dreiplanar auf steilen Flanken, die Kachelung wird durch eine zweite, gedrehte Abtastung aufgebrochen.
@@ -67,7 +71,7 @@ cd web && npx astro preview
 ## Mögliche nächste Schritte
 
 - Baukasten aus Chassis und Waffe, Forschungsbaum
-- Pionierfahrzeug für weitere Gebäude (Geschütztürme, Fabriken)
+- Pionierfahrzeug, das Gebäude errichtet, und weitere Gebäudetypen (Forschung, Radar)
 - Nebel des Krieges und Minikarte
 - Diplomatie mit mehreren KI-Fraktionen
 - Mehrspieler über einen Rust-Server (WebSockets)

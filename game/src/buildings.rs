@@ -257,3 +257,404 @@ pub fn build_hq(team: Team, meshes: &mut Assets<Mesh>) -> HqMeshes {
         dish: meshes.add(dish.build().expect("Radar")),
     }
 }
+
+// ================================================================ Baubare Gebäude
+
+/// Fertige Meshes eines baubaren Gebäudes
+#[derive(Clone)]
+pub struct StructMeshes {
+    pub body: Handle<Mesh>,
+    pub glow: Handle<Mesh>,
+    pub glass: Option<Handle<Mesh>>,
+    /// Drehbarer Geschützkopf: Mesh, Leuchtteile, Drehpunkt
+    pub head: Option<(Handle<Mesh>, Handle<Mesh>, Vec3)>,
+    /// Rotierendes Bauteil (Lüfter) und seine Lage
+    pub spin: Option<(Handle<Mesh>, Vec3)>,
+    /// So tief steckt das Gebäude zu Baubeginn im Boden
+    pub height: f32,
+}
+
+/// Quader zwischen zwei Punkten (Träger, Streben)
+fn beam(g: &mut Geo, a: Vec3, b: Vec3, t: f32, col: Vec3) {
+    let d = b - a;
+    g.mesh(
+        Cuboid::new(t, d.length(), t).mesh().build(),
+        Transform::from_translation((a + b) / 2.0).with_rotation(Quat::from_rotation_arc(Vec3::Y, d.normalize())),
+        col,
+    );
+}
+
+/// Drehung um die Hochachse, die +X auf die Richtung (x, z) legt
+fn yaw_to(d: Vec2) -> Quat {
+    Quat::from_rotation_y((-d.y).atan2(d.x))
+}
+
+/// Betonfundament mit Fugen. Reicht tief in den Boden, damit es auch am Hang nicht schwebt.
+fn foundation(g: &mut Geo, w: f32, c: f32, top: f32) {
+    let concrete = lin(Color::srgb(0.50, 0.49, 0.46));
+    let joint = lin(Color::srgb(0.34, 0.33, 0.31));
+    g.extrude_y(&chamfered(w, w, c), -1.2, top, 0.985, 0.0, concrete);
+    let n = (w / 3.8) as i32;
+    for k in -n..=n {
+        let o = k as f32 * 1.9;
+        g.cuboid(Vec3::new(o, top + 0.005, 0.0), Vec3::new(0.04, 0.01, w * 0.9), Quat::IDENTITY, joint);
+        g.cuboid(Vec3::new(0.0, top + 0.005, o), Vec3::new(w * 0.9, 0.01, 0.04), Quat::IDENTITY, joint);
+    }
+}
+
+/// Lampe an einem Mast
+fn lamp_post(g: &mut Geo, glow: &mut Geo, base: Vec3, h: f32, toward: Vec3, col: Vec3) {
+    g.cyl(base + Vec3::Y * h / 2.0, 0.05, h, Vec3::Y, 6, col);
+    let arm = toward.normalize_or_zero() * 0.3;
+    beam(g, base + Vec3::Y * h, base + Vec3::Y * h + arm, 0.05, col);
+    g.cuboid(base + Vec3::Y * (h - 0.04) + arm, Vec3::new(0.18, 0.1, 0.18), Quat::IDENTITY, col);
+    glow.cuboid(base + Vec3::Y * (h - 0.1) + arm, Vec3::new(0.13, 0.01, 0.13), Quat::IDENTITY, Vec3::ONE);
+}
+
+/// Geschützturm: Betonsockel mit Brüstung, gepanzerter Drehkranz, Kopf mit Zwillingsrohren
+pub fn build_turret(team: Team, meshes: &mut Assets<Mesh>) -> StructMeshes {
+    let p = palette(team);
+    let concrete = lin(Color::srgb(0.50, 0.49, 0.46));
+    let mut g = Geo::default();
+    let mut glow = Geo::default();
+    let top = 0.4;
+
+    foundation(&mut g, 3.8, 1.0, top);
+    // Brüstung aus Betonelementen, hinten offen
+    let ring = chamfered(3.5, 3.5, 0.95);
+    for i in 0..8 {
+        if i == 4 {
+            continue;
+        }
+        let (a, b) = (ring[i] * 0.97, ring[(i + 1) % 8] * 0.97);
+        let d = b - a;
+        let mid = (a + b) / 2.0;
+        g.cuboid(Vec3::new(mid.x, top + 0.28, mid.y), Vec3::new(d.length() + 0.05, 0.56, 0.26), yaw_to(d), concrete);
+        g.cuboid(Vec3::new(mid.x, top + 0.57, mid.y), Vec3::new(d.length() - 0.1, 0.04, 0.3), yaw_to(d), lin(Color::srgb(0.40, 0.39, 0.37)));
+    }
+    hazard(&mut g, Vec3::new(-0.7, top + 0.01, 1.45), 1.4, 6);
+
+    // Achteckiger, gepanzerter Sockel mit Schraubenkranz und Wartungsluke
+    g.frustum(Vec3::Y * (top + 0.6), 1.0, 0.8, 1.2, Vec3::Y, 8, p.paint_dark);
+    g.cyl(Vec3::Y * (top + 0.06), 1.06, 0.12, Vec3::Y, 8, p.steel_dark);
+    for i in 0..16 {
+        let a = TAU * i as f32 / 16.0;
+        g.cuboid(Vec3::new(a.cos() * 0.76, top + 1.21, a.sin() * 0.76), Vec3::splat(0.05), Quat::IDENTITY, p.metal);
+    }
+    g.cyl(Vec3::Y * (top + 1.25), 0.86, 0.1, Vec3::Y, 24, p.steel_dark);
+    g.cuboid(Vec3::new(0.0, top + 0.55, 0.9), Vec3::new(0.5, 0.65, 0.05), Quat::from_rotation_x(-0.17), p.metal);
+    g.cuboid(Vec3::new(0.18, top + 0.55, 0.95), Vec3::new(0.05, 0.12, 0.05), Quat::IDENTITY, p.steel_dark);
+    // Munitionskisten und Kabel hinten
+    for (x, z, r) in [(-1.0, 1.0, 0.2), (-0.8, 1.25, -0.3)] {
+        g.cuboid(Vec3::new(x, top + 0.18, z), Vec3::new(0.5, 0.36, 0.3), Quat::from_rotation_y(r), lin(Color::srgb(0.30, 0.33, 0.22)));
+    }
+    g.cyl(Vec3::new(0.6, top + 0.05, 1.1), 0.04, 1.0, Vec3::new(0.3, 0.0, 1.0), 6, p.rubber);
+    lamp_post(&mut g, &mut glow, Vec3::new(1.35, top, 1.35), 1.4, Vec3::new(-1.0, 0.0, -1.0), p.steel_dark);
+    g.weather(p.dust, 1.0, 0.45);
+
+    // --- Kopf (Drehpunkt auf dem Drehkranz, Rohre zeigen nach -Z)
+    let mut h = Geo::default();
+    let mut hg = Geo::default();
+    let plan = [
+        Vec2::new(-0.5, -0.95),
+        Vec2::new(0.5, -0.95),
+        Vec2::new(0.85, -0.35),
+        Vec2::new(0.85, 0.85),
+        Vec2::new(-0.85, 0.85),
+        Vec2::new(-0.85, -0.35),
+    ];
+    h.extrude_y(&plan, 0.0, 0.8, 0.86, 0.05, p.paint);
+    let roof: Vec<Vec2> = plan.iter().map(|v| *v * 0.86 + Vec2::new(0.0, 0.05)).collect();
+    h.extrude_y(&roof, 0.8, 0.86, 0.94, 0.0, p.paint_dark);
+    // Zusatzpanzer an den Seiten, Blende vorne
+    for s in [-1.0f32, 1.0] {
+        h.cuboid(Vec3::new(s * 0.9, 0.42, 0.2), Vec3::new(0.07, 0.62, 1.15), Quat::from_rotation_z(s * 0.12), p.paint_dark);
+        h.cuboid(Vec3::new(s * 0.955, 0.45, 0.35), Vec3::new(0.01, 0.24, 0.36), Quat::from_rotation_z(s * 0.12), p.marking);
+        for k in 0..3 {
+            h.cuboid(Vec3::new(s * 0.94, 0.68, -0.15 + k as f32 * 0.4), Vec3::splat(0.05), Quat::IDENTITY, p.metal);
+        }
+    }
+    h.cuboid(Vec3::new(0.0, 0.4, -1.0), Vec3::new(0.95, 0.52, 0.2), Quat::IDENTITY, p.paint_dark);
+    // Zwillingsrohre mit Rauchabsauger und Mündungsbremse
+    for x in [-0.25f32, 0.25] {
+        h.frustum(Vec3::new(x, 0.4, -1.28), 0.14, 0.1, 0.36, Vec3::NEG_Z, 10, p.steel_dark);
+        h.cyl(Vec3::new(x, 0.4, -2.2), 0.07, 1.9, Vec3::Z, 10, p.steel_dark);
+        h.cyl(Vec3::new(x, 0.4, -1.95), 0.095, 0.3, Vec3::Z, 10, p.metal);
+        h.cuboid(Vec3::new(x, 0.4, -3.18), Vec3::new(0.2, 0.13, 0.24), Quat::IDENTITY, p.steel_dark);
+        h.cuboid(Vec3::new(x, 0.4, -3.18), Vec3::new(0.22, 0.05, 0.06), Quat::IDENTITY, p.metal);
+    }
+    // Sensorkasten mit Linse, Luke, Antenne
+    h.cuboid(Vec3::new(0.45, 1.02, -0.15), Vec3::new(0.34, 0.3, 0.42), Quat::IDENTITY, p.metal);
+    h.cuboid(Vec3::new(0.45, 1.19, -0.15), Vec3::new(0.38, 0.04, 0.46), Quat::IDENTITY, p.steel_dark);
+    hg.cuboid(Vec3::new(0.45, 1.02, -0.365), Vec3::new(0.2, 0.1, 0.01), Quat::IDENTITY, Vec3::ONE);
+    h.cyl(Vec3::new(-0.32, 0.89, 0.3), 0.24, 0.06, Vec3::Y, 14, p.paint_dark);
+    h.cuboid(Vec3::new(-0.32, 0.93, 0.3), Vec3::new(0.3, 0.03, 0.05), Quat::IDENTITY, p.metal);
+    h.cyl(Vec3::new(-0.62, 1.5, 0.68), 0.012, 1.4, Vec3::Y, 4, p.steel_dark);
+    // Munitionskasten hinten mit Leuchtstreifen
+    h.cuboid(Vec3::new(0.0, 0.45, 0.98), Vec3::new(1.3, 0.55, 0.32), Quat::IDENTITY, p.paint_dark);
+    for x in [-0.4f32, 0.0, 0.4] {
+        h.cuboid(Vec3::new(x, 0.45, 1.145), Vec3::new(0.3, 0.4, 0.02), Quat::IDENTITY, p.paint);
+    }
+    hg.cuboid(Vec3::new(0.0, 0.67, 1.15), Vec3::new(0.9, 0.04, 0.01), Quat::IDENTITY, Vec3::ONE);
+    h.weather(p.dust, 0.0, 0.0);
+
+    StructMeshes {
+        body: meshes.add(g.build().expect("Turm")),
+        glow: meshes.add(glow.build().expect("Turm-Licht")),
+        glass: None,
+        head: Some((meshes.add(h.build().expect("Kopf")), meshes.add(hg.build().expect("Kopf-Licht")), Vec3::Y * (top + 1.3))),
+        spin: None,
+        height: 3.4,
+    }
+}
+
+/// Raffinerie: Halle mit Satteldach, zwei Silos auf Stelzen, Abladebucht mit Förderband, Schornstein.
+/// Die Bucht liegt auf +Z.
+pub fn build_refinery(team: Team, meshes: &mut Assets<Mesh>) -> StructMeshes {
+    let p = palette(team);
+    let concrete = lin(Color::srgb(0.50, 0.49, 0.46));
+    let mut g = Geo::default();
+    let mut glow = Geo::default();
+    let top = 0.35;
+    foundation(&mut g, 6.8, 0.9, top);
+
+    // --- Halle
+    let off = Vec2::new(-1.3, -1.0);
+    let hall: Vec<Vec2> = chamfered(3.4, 3.8, 0.3).into_iter().map(|v| v + off).collect();
+    g.extrude_y(&hall, top, 2.5, 1.0, 0.0, p.paint);
+    let plinth: Vec<Vec2> = chamfered(3.52, 3.92, 0.34).into_iter().map(|v| v + off).collect();
+    g.extrude_y(&plinth, top, top + 0.4, 1.0, 0.0, p.paint_dark);
+    // Satteldach mit First entlang x, Dachrinne
+    g.extrude_x(&[Vec2::new(-3.0, 2.5), Vec2::new(1.0, 2.5), Vec2::new(-1.0, 3.2)], -3.12, 0.52, p.paint_dark);
+    for z in [-3.0f32, 1.0] {
+        g.cyl(Vec3::new(-1.3, 2.47, z), 0.06, 3.7, Vec3::X, 6, p.metal);
+    }
+    // Pfeiler an den Längsseiten
+    for z in [-2.6f32, -1.6, -0.6, 0.4] {
+        for x in [-3.03f32, 0.43] {
+            g.cuboid(Vec3::new(x, 1.45, z), Vec3::new(0.12, 2.1, 0.2), Quat::IDENTITY, p.paint_dark);
+        }
+    }
+    glow.cuboid(Vec3::new(-1.3, 1.95, -1.0), Vec3::new(3.42, 0.16, 3.82), Quat::IDENTITY, Vec3::ONE);
+    g.cuboid(Vec3::new(-1.3, 2.1, -1.0), Vec3::new(3.6, 0.04, 4.0), Quat::IDENTITY, p.steel_dark);
+    // Rolltor zur Bucht
+    g.cuboid(Vec3::new(-1.6, top + 0.8, 0.92), Vec3::new(1.5, 1.6, 0.04), Quat::IDENTITY, p.steel_dark);
+    for k in 0..7 {
+        g.cuboid(Vec3::new(-1.6, top + 0.12 + k as f32 * 0.21, 0.95), Vec3::new(1.4, 0.15, 0.03), Quat::IDENTITY, p.metal);
+    }
+    for x in [-2.4f32, -0.8] {
+        g.cuboid(Vec3::new(x, top + 0.85, 0.97), Vec3::new(0.1, 1.7, 0.08), Quat::IDENTITY, lin(Color::srgb(0.78, 0.62, 0.12)));
+    }
+    glow.cuboid(Vec3::new(-1.6, top + 1.82, 0.99), Vec3::new(0.9, 0.05, 0.02), Quat::IDENTITY, Vec3::ONE);
+    // Teamkennung an der Seitenwand
+    g.cuboid(Vec3::new(-3.02, 1.35, -1.6), Vec3::new(0.02, 0.8, 0.8), Quat::IDENTITY, p.marking);
+    g.cuboid(Vec3::new(-3.03, 1.35, -1.6), Vec3::new(0.02, 0.12, 0.5), Quat::IDENTITY, p.paint_dark);
+    // Lüftungsgitter auf dem Dach
+    for x in [-2.3f32, -0.3] {
+        g.cuboid(Vec3::new(x, 3.0, -1.0), Vec3::new(0.5, 0.25, 0.5), Quat::IDENTITY, p.metal);
+        g.cuboid(Vec3::new(x, 3.15, -1.0), Vec3::new(0.6, 0.04, 0.6), Quat::IDENTITY, p.steel_dark);
+    }
+
+    // --- Silos auf Stelzen mit Trichter, Ringen und Leiter
+    for z in [-2.05f32, -0.35] {
+        let c = Vec3::new(1.95, top, z);
+        for (dx, dz) in [(-0.5, -0.5), (0.5, -0.5), (0.5, 0.5), (-0.5, 0.5)] {
+            g.cyl(c + Vec3::new(dx, 0.7, dz), 0.06, 1.4, Vec3::Y, 6, p.steel_dark);
+        }
+        beam(&mut g, c + Vec3::new(-0.5, 0.1, -0.5), c + Vec3::new(0.5, 1.2, -0.5), 0.04, p.steel_dark);
+        beam(&mut g, c + Vec3::new(0.5, 0.1, 0.5), c + Vec3::new(-0.5, 1.2, 0.5), 0.04, p.steel_dark);
+        g.frustum(c + Vec3::Y * 1.0, 0.16, 0.78, 0.8, Vec3::Y, 16, p.metal);
+        g.cyl(c + Vec3::Y * 2.6, 0.78, 2.4, Vec3::Y, 20, p.paint);
+        g.frustum(c + Vec3::Y * 4.1, 0.78, 0.18, 0.6, Vec3::Y, 20, p.paint_dark);
+        for y in [1.55f32, 2.4, 3.2, 3.75] {
+            g.cyl(c + Vec3::Y * y, 0.8, 0.05, Vec3::Y, 20, p.paint_dark);
+        }
+        g.cyl(c + Vec3::Y * 2.8, 0.79, 0.22, Vec3::Y, 20, p.marking);
+        for k in 0..10 {
+            g.cuboid(c + Vec3::new(0.81, 1.5 + k as f32 * 0.25, 0.0), Vec3::new(0.03, 0.02, 0.26), Quat::IDENTITY, p.metal);
+        }
+        glow.cyl(c + Vec3::Y * 4.45, 0.06, 0.08, Vec3::Y, 8, Vec3::ONE);
+        g.cyl(c + Vec3::Y * 0.45, 0.08, 0.6, Vec3::Y, 8, p.steel_dark);
+    }
+    // Laufsteg zwischen den Silos, Rohr zur Halle
+    beam(&mut g, Vec3::new(1.95, top + 4.0, -2.05), Vec3::new(1.95, top + 4.0, -0.35), 0.16, p.steel_dark);
+    g.cyl(Vec3::new(0.85, 1.8, -1.2), 0.1, 0.9, Vec3::X, 8, p.metal);
+    g.cyl(Vec3::new(0.85, top + 0.15, -2.05), 0.08, 1.0, Vec3::X, 8, p.metal);
+
+    // --- Abladebucht: Stahlrost mit Warnstreifen, Erzhaufen, Förderband in die Halle
+    g.cuboid(Vec3::new(0.0, top + 0.01, 2.3), Vec3::new(2.8, 0.02, 1.6), Quat::IDENTITY, p.steel_dark);
+    for k in 0..12 {
+        g.cuboid(Vec3::new(-1.3 + k as f32 * 0.236, top + 0.03, 2.3), Vec3::new(0.04, 0.02, 1.5), Quat::IDENTITY, p.metal);
+    }
+    hazard(&mut g, Vec3::new(-1.4, top + 0.02, 3.2), 2.8, 10);
+    hazard(&mut g, Vec3::new(-1.4, top + 0.02, 1.4), 2.8, 10);
+    g.mesh(
+        Sphere::new(0.6).mesh().ico(1).expect("Haufen").scaled_by(Vec3::new(1.3, 0.45, 1.0)),
+        Transform::from_translation(Vec3::new(-0.7, top + 0.05, 2.35)),
+        lin(Color::srgb(0.30, 0.26, 0.21)),
+    );
+    let (a, b) = (Vec3::new(0.6, top + 0.35, 2.4), Vec3::new(0.6, 2.6, 0.3));
+    let d = b - a;
+    let belt_rot = Quat::from_rotation_arc(Vec3::Z, d.normalize());
+    g.mesh(Cuboid::new(0.6, 0.1, d.length()).mesh().build(), Transform::from_translation((a + b) / 2.0).with_rotation(belt_rot), p.rubber);
+    for s in [-0.34f32, 0.34] {
+        beam(&mut g, a + Vec3::new(s, 0.1, 0.0), b + Vec3::new(s, 0.1, 0.0), 0.06, p.paint_dark);
+    }
+    for k in 1..4 {
+        let m = a + d * (k as f32 / 4.0);
+        g.cyl(Vec3::new(m.x, (m.y + top) / 2.0, m.z), 0.05, m.y - top, Vec3::Y, 6, p.steel_dark);
+    }
+    g.cuboid(b + Vec3::new(0.0, 0.25, -0.1), Vec3::new(0.8, 0.6, 0.5), Quat::IDENTITY, p.metal);
+
+    // --- Schornstein durchs Dach mit Ringen und Warnlicht
+    let ch = Vec3::new(-2.55, 0.0, -2.45);
+    g.cyl(ch + Vec3::Y * 2.9, 0.24, 5.1, Vec3::Y, 14, concrete);
+    for (y, col) in [(4.3, p.paint_dark), (4.9, p.marking), (5.4, p.paint_dark)] {
+        g.cyl(ch + Vec3::Y * y, 0.26, 0.12, Vec3::Y, 14, col);
+    }
+    glow.cyl(ch + Vec3::Y * 5.48, 0.2, 0.04, Vec3::Y, 14, Vec3::ONE);
+
+    lamp_post(&mut g, &mut glow, Vec3::new(1.6, top, 3.0), 2.0, Vec3::new(-1.0, 0.0, -0.3), p.steel_dark);
+    for (x, z) in [(-2.9f32, 2.6f32), (-2.5, 2.9)] {
+        g.cyl(Vec3::new(x, top + 0.42, z), 0.28, 0.84, Vec3::Y, 12, lin(Color::srgb(0.35, 0.30, 0.18)));
+    }
+    g.weather(p.dust, 1.3, 0.45);
+
+    StructMeshes {
+        body: meshes.add(g.build().expect("Raffinerie")),
+        glow: meshes.add(glow.build().expect("Raffinerie-Licht")),
+        glass: None,
+        head: None,
+        spin: None,
+        height: 5.8,
+    }
+}
+
+/// Fabrik: Halle mit Sheddach und Oberlichtern, Hallentor auf +Z, Schornsteine,
+/// Kühlaggregat mit drehendem Lüfter und Portalkran
+pub fn build_factory(team: Team, meshes: &mut Assets<Mesh>) -> StructMeshes {
+    let p = palette(team);
+    let concrete = lin(Color::srgb(0.50, 0.49, 0.46));
+    let mut g = Geo::default();
+    let mut glow = Geo::default();
+    let mut glass = Geo::default();
+    let top = 0.35;
+    foundation(&mut g, 8.0, 1.0, top);
+
+    // --- Halle
+    let (cx, cz, w, d) = (-0.5f32, -0.45f32, 5.6f32, 5.3f32);
+    let off = Vec2::new(cx, cz);
+    let hall: Vec<Vec2> = chamfered(w, d, 0.3).into_iter().map(|v| v + off).collect();
+    g.extrude_y(&hall, top, 3.0, 1.0, 0.0, p.paint);
+    let plinth: Vec<Vec2> = chamfered(w + 0.12, d + 0.12, 0.34).into_iter().map(|v| v + off).collect();
+    g.extrude_y(&plinth, top, top + 0.45, 1.0, 0.0, p.paint_dark);
+    // Pfeiler
+    for k in 0..6 {
+        let x = cx - w / 2.0 + 0.4 + k as f32 * (w - 0.8) / 5.0;
+        g.cuboid(Vec3::new(x, 1.7, cz - d / 2.0 - 0.04), Vec3::new(0.2, 2.6, 0.12), Quat::IDENTITY, p.paint_dark);
+    }
+    for k in 0..5 {
+        let z = cz - d / 2.0 + 0.4 + k as f32 * (d - 0.8) / 4.0;
+        for x in [cx - w / 2.0 - 0.04, cx + w / 2.0 + 0.04] {
+            g.cuboid(Vec3::new(x, 1.7, z), Vec3::new(0.12, 2.6, 0.2), Quat::IDENTITY, p.paint_dark);
+        }
+    }
+    glow.cuboid(Vec3::new(cx, 2.35, cz), Vec3::new(w + 0.02, 0.15, d + 0.02), Quat::IDENTITY, Vec3::ONE);
+    g.cuboid(Vec3::new(cx, 2.5, cz), Vec3::new(w + 0.2, 0.04, d + 0.2), Quat::IDENTITY, p.steel_dark);
+    // Sheddach: drei Zähne, die steile Seite verglast (nach -Z)
+    let teeth = 3;
+    let tw = d / teeth as f32;
+    for i in 0..teeth {
+        let z0 = cz - d / 2.0 + i as f32 * tw;
+        g.extrude_x(&[Vec2::new(z0, 3.0), Vec2::new(z0 + tw, 3.0), Vec2::new(z0, 3.85)], cx - w / 2.0 - 0.05, cx + w / 2.0 + 0.05, p.paint_dark);
+        glass.cuboid(Vec3::new(cx, 3.42, z0 - 0.02), Vec3::new(w - 0.1, 0.74, 0.03), Quat::IDENTITY, Vec3::ONE);
+        for k in 0..8 {
+            let x = cx - w / 2.0 + 0.3 + k as f32 * (w - 0.6) / 7.0;
+            g.cuboid(Vec3::new(x, 3.42, z0 - 0.04), Vec3::new(0.05, 0.8, 0.04), Quat::IDENTITY, p.steel_dark);
+        }
+    }
+
+    // --- Hallentor mit Lamellen, Rahmen, Warnstreifen und Lampen
+    let gz = cz + d / 2.0 + 0.02;
+    let gw = 3.2;
+    g.cuboid(Vec3::new(cx, top + 1.2, gz), Vec3::new(gw, 2.4, 0.04), Quat::IDENTITY, p.steel_dark);
+    for k in 0..11 {
+        g.cuboid(Vec3::new(cx, top + 0.12 + k as f32 * 0.215, gz + 0.03), Vec3::new(gw - 0.15, 0.16, 0.03), Quat::IDENTITY, p.metal);
+    }
+    for s in [-1.0f32, 1.0] {
+        g.cuboid(Vec3::new(cx + s * (gw / 2.0 + 0.08), top + 1.25, gz + 0.05), Vec3::new(0.16, 2.5, 0.12), Quat::IDENTITY, p.paint_dark);
+        g.cuboid(Vec3::new(cx + s * (gw / 2.0 + 0.08), top + 0.6, gz + 0.12), Vec3::new(0.17, 1.2, 0.02), Quat::IDENTITY, lin(Color::srgb(0.78, 0.62, 0.12)));
+    }
+    g.cuboid(Vec3::new(cx, top + 2.52, gz + 0.06), Vec3::new(gw + 0.4, 0.16, 0.14), Quat::IDENTITY, p.paint_dark);
+    for k in 0..4 {
+        let x = cx - 1.2 + k as f32 * 0.8;
+        g.cuboid(Vec3::new(x, top + 2.66, gz + 0.12), Vec3::new(0.24, 0.08, 0.16), Quat::IDENTITY, p.steel_dark);
+        glow.cuboid(Vec3::new(x, top + 2.61, gz + 0.2), Vec3::new(0.18, 0.03, 0.01), Quat::IDENTITY, Vec3::ONE);
+    }
+    hazard(&mut g, Vec3::new(cx - gw / 2.0, top + 0.01, gz + 0.5), gw, 12);
+    // Teamkennung neben dem Tor
+    g.cuboid(Vec3::new(cx + 2.25, 1.7, gz + 0.01), Vec3::new(0.75, 0.75, 0.02), Quat::IDENTITY, p.marking);
+    g.cuboid(Vec3::new(cx + 2.25, 1.7, gz + 0.025), Vec3::new(0.45, 0.1, 0.01), Quat::IDENTITY, p.paint_dark);
+    g.cuboid(Vec3::new(cx + 2.25, 1.7, gz + 0.025), Vec3::new(0.1, 0.45, 0.01), Quat::IDENTITY, p.paint_dark);
+
+    // --- Schornsteine durchs Dach
+    for (x, h) in [(0.9f32, 6.2f32), (1.6, 5.6)] {
+        let c = Vec3::new(x, 0.0, cz - d / 2.0 + 0.55);
+        g.cyl(c + Vec3::Y * (h / 2.0 + 0.5), 0.22, h - 1.0, Vec3::Y, 14, concrete);
+        for (y, col) in [(h - 0.9, p.paint_dark), (h - 0.45, p.marking), (h - 0.05, p.paint_dark)] {
+            g.cyl(c + Vec3::Y * y, 0.24, 0.12, Vec3::Y, 14, col);
+        }
+        glow.cyl(c + Vec3::Y * (h + 0.02), 0.18, 0.04, Vec3::Y, 14, Vec3::ONE);
+    }
+
+    // --- Kühlaggregat an der Ostseite mit Gitter und Lüfter
+    let ac = Vec3::new(cx + w / 2.0 + 0.75, top, cz - 1.0);
+    g.cuboid(ac + Vec3::Y * 0.6, Vec3::new(1.1, 1.2, 1.7), Quat::IDENTITY, p.metal);
+    for k in 0..7 {
+        g.cuboid(ac + Vec3::new(0.56, 0.6, -0.7 + k as f32 * 0.233), Vec3::new(0.02, 1.0, 0.05), Quat::IDENTITY, p.steel_dark);
+    }
+    g.cyl(ac + Vec3::new(0.0, 1.26, 0.0), 0.5, 0.12, Vec3::Y, 20, p.steel_dark);
+    g.cyl(ac + Vec3::new(-0.3, 1.0, 0.95), 0.08, 0.7, Vec3::new(-1.0, 0.0, 0.0), 8, p.metal);
+
+    // --- Portalkran über dem Lagerplatz an der Westseite
+    let kx = cx - w / 2.0 - 0.85;
+    for z in [cz - 1.6, cz + 1.4] {
+        beam(&mut g, Vec3::new(kx - 0.45, top, z), Vec3::new(kx, top + 3.4, z), 0.12, lin(Color::srgb(0.78, 0.62, 0.12)));
+        beam(&mut g, Vec3::new(kx + 0.45, top, z), Vec3::new(kx, top + 3.4, z), 0.12, lin(Color::srgb(0.78, 0.62, 0.12)));
+    }
+    beam(&mut g, Vec3::new(kx, top + 3.45, cz - 1.8), Vec3::new(kx, top + 3.45, cz + 1.6), 0.2, lin(Color::srgb(0.78, 0.62, 0.12)));
+    g.cuboid(Vec3::new(kx, top + 3.25, cz - 0.2), Vec3::new(0.35, 0.25, 0.4), Quat::IDENTITY, p.steel_dark);
+    g.cyl(Vec3::new(kx, top + 2.5, cz - 0.2), 0.015, 1.3, Vec3::Y, 4, p.steel_dark);
+    g.cuboid(Vec3::new(kx, top + 1.82, cz - 0.2), Vec3::new(0.18, 0.14, 0.12), Quat::IDENTITY, lin(Color::srgb(0.78, 0.62, 0.12)));
+    // Lager: Stahlträger und Kisten
+    for k in 0..3 {
+        g.cuboid(Vec3::new(kx, top + 0.1 + k as f32 * 0.2, cz + 0.8), Vec3::new(0.6, 0.18, 1.6), Quat::from_rotation_y(k as f32 * 0.05), p.metal);
+    }
+    for (z, s) in [(cz - 1.0, 0.6f32), (cz - 1.4, 0.5)] {
+        g.cuboid(Vec3::new(kx, top + s / 2.0, z), Vec3::splat(s), Quat::from_rotation_y(z), lin(Color::srgb(0.42, 0.34, 0.22)));
+    }
+    lamp_post(&mut g, &mut glow, Vec3::new(cx + 2.3, top, gz + 1.0), 2.3, Vec3::new(-1.0, 0.0, -0.4), p.steel_dark);
+    g.weather(p.dust, 1.5, 0.45);
+
+    // Lüfterrad
+    let mut fan = Geo::default();
+    fan.cyl(Vec3::ZERO, 0.09, 0.1, Vec3::Y, 10, p.steel_dark);
+    for i in 0..5 {
+        let a = TAU * i as f32 / 5.0;
+        fan.cuboid(
+            Vec3::new(a.cos() * 0.24, 0.0, a.sin() * 0.24),
+            Vec3::new(0.34, 0.02, 0.12),
+            Quat::from_rotation_y(-a) * Quat::from_rotation_x(0.35),
+            p.metal,
+        );
+    }
+
+    StructMeshes {
+        body: meshes.add(g.build().expect("Fabrik")),
+        glow: meshes.add(glow.build().expect("Fabrik-Licht")),
+        glass: Some(meshes.add(glass.build().expect("Fabrik-Glas"))),
+        head: None,
+        spin: Some((meshes.add(fan.build().expect("Lüfter")), ac + Vec3::Y * 1.3)),
+        height: 6.6,
+    }
+}

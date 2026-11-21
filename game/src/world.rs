@@ -124,6 +124,7 @@ pub fn setup_world(
                 Health { hp: 3000.0, max: 3000.0 },
                 Building { radius: 4.8 },
                 Hq { queue: Vec::new(), progress: 0.0 },
+                Depot,
             ))
             .id();
         models::build_hq(&mut commands, &kit, hq, team);
