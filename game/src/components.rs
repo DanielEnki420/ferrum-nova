@@ -13,7 +13,7 @@ pub struct Health {
     pub max: f32,
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum UnitKind {
     Sammler,
     Panzer,

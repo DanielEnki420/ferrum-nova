@@ -69,6 +69,7 @@ fn main() {
                 input::select_army,
                 hud::build_hotkeys,
                 ai::enemy_ai,
+                ai::ai_tactics,
                 units::enqueue_builds,
                 construction::place_buildings,
                 construction::construct,
@@ -87,6 +88,7 @@ fn main() {
                 units::harvest,
                 units::projectiles,
                 units::production,
+                units::repair,
                 units::deaths,
                 units::check_outcome,
             )

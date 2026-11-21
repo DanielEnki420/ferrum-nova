@@ -63,7 +63,11 @@ cd web && npx astro preview
   - **Geschützturm** (120 F / 40 P): Betonsockel mit Brüstung, Drehkopf mit Zwillingsrohren. Verteidigt die Basis selbstständig.
   - **Raffinerie** (150 F / 0 P): Halle, zwei Silos auf Stelzen, Abladebucht mit Förderband. Sammler liefern an der nächsten Abladestelle ab, das verkürzt ihre Wege.
   - **Fabrik** (200 F / 80 P): Halle mit Sheddach, Portalkran und Kühlaggregat. Jede Fabrik beschleunigt die Produktion im HQ um 40 % (bis zu drei zählen).
-- Gegner-KI (Vaar-Schwarm): baut eine Wirtschaft auf, errichtet eine Raffinerie, Geschütztürme zur Front und später eine Fabrik und greift ab etwa 2,5 Minuten in immer größeren Wellen an.
+- Gegner-KI (Vaar-Schwarm) in drei Ebenen:
+  - **Strategie:** Die KI sieht nur, was ihre Einheiten und Gebäude erfassen, und merkt es sich. Ein Späher erkundet Felder, Kartenmitte und Spielerbasis. Gebaut wird als Konter auf das Gesehene: Haubitzen gegen Geschütztürme (ohne Fabrik Raketenwerfer), Raketenwerfer und Bollwerke gegen viel Panzerung, Späher gegen Artillerie. Die Wirtschaft wächst mit zwei Sammlern je Raffinerie. Nach etwa vier Minuten entsteht ein Außenposten mit zweiter Raffinerie und Geschützturm an einem weiteren Feld.
+  - **Verteidigung:** Gegner nahe Basis oder Sammlern gelten als Bedrohung. Die Reserve rückt aus, bei Übermacht kehrt auch eine laufende Angriffswelle um. Sammler fliehen und meiden umkämpfte Felder, neue Geschütztürme kommen an die bedrohte Seite.
+  - **Angriff und Taktik:** Ab etwa 2,5 Minuten sammeln sich Wellen vor der Basis und rücken geschlossen vor, Nachzügler schließen auf. Ziele sind bekannte Gebäude (Raffinerien zuerst, mit Artillerie die Geschütztürme), sonst das HQ. Einheiten wählen ihr Ziel nach Waffe und Zustand: Raketen gegen Panzerung, Späher gegen Artillerie, angeschlagene Gegner zuerst. Haubitzen halten Abstand, schwer beschädigte Einheiten fahren zur Reparatur ans HQ, eine stark geschwächte Welle zieht sich zurück.
+- Werkstatt: Fahrzeuge in der Nähe des eigenen HQ werden außerhalb des Gefechts langsam repariert (beide Seiten).
 - Sieg: feindliches HQ zerstört. Niederlage: eigenes HQ verloren.
 - Grafik:
   - **Gelände:** Relief mit Bergen am Kartenrand. Ein eigener Splat-Shader (`game/assets/shaders/terrain.wesl`) mischt vier echte Bodentexturen (Erde, Geröll, Fels, Gras; CC0, siehe [CREDITS.md](CREDITS.md)) höhenbasiert. Fels liegt dreiplanar auf steilen Flanken, die Kachelung wird durch eine zweite, gedrehte Abtastung aufgebrochen.
@@ -77,7 +81,7 @@ cd web && npx astro preview
   - **Gebäudeeinsturz:** Zerstörte Gebäude sacken unter mehreren Explosionen ab und kippen. Eine Staubwolke quillt heraus, zurück bleibt ein brennender Trümmerhaufen mit Wandresten und verbogenen Trägern.
   - **Umgebung:** Die Raffinerie dampft, die Fabrikschornsteine rauchen, auf Baustellen sprühen Schweißfunken mit bläulichem Lichtbogen, über den Plasmaquellen steigen violett leuchtende Teilchen auf.
 - Leistung: Statisches (Felsen, Vegetation) ist pro Kartenkachel zu einem Mesh zusammengefasst, jedes Fahrzeug besteht aus drei bis vier Meshes. **F3** blendet FPS, Bildzeit und Objektzahl ein und aus.
-- Tests: `cargo test` im Ordner `game` lässt die Spiellogik ohne Grafik über simulierte Zeit laufen. Geprüft wird unter anderem, dass Sammler an der nächsten fertigen Raffinerie abladen, dass die KI ihre Gebäude an gültigen Plätzen errichtet und dass ein zerstörtes Gebäude sofort aus dem Spiel ausscheidet, einstürzt und Trümmer hinterlässt.
+- Tests: `cargo test` im Ordner `game` lässt die Spiellogik ohne Grafik über simulierte Zeit laufen. Geprüft wird unter anderem, dass Sammler an der nächsten fertigen Raffinerie abladen, dass die KI ihre Gebäude an gültigen Plätzen errichtet dass ein zerstörtes Gebäude sofort aus dem Spiel ausscheidet, einstürzt und Trümmer hinterlässt, und wie sich die KI verhält: Konter, Flucht der Sammler, Verteidigung, Wellen mit Rückzug, Reparatur, Ausweichen der Haubitzen, Erkundung. Eine ganze Partie läuft dabei im Zeitraffer durch.
 - Steuerung: Linksklick oder Ziehen wählt aus, F wählt alle Kampfeinheiten. Rechtsklick bewegt, greift an oder baut ab. Strg+Rechtsklick ist ein Angriffsmarsch. WASD/Pfeile/Bildschirmrand bewegen die Kamera, Q/E drehen sie, das Mausrad zoomt.
 
 ## Mögliche nächste Schritte

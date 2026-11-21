@@ -550,6 +550,25 @@ pub fn production(
     }
 }
 
+/// Werkstatt: so nah am eigenen HQ werden Fahrzeuge repariert, solange sie nicht kämpfen
+pub const REPAIR_RANGE: f32 = 16.0;
+pub const REPAIR_RATE: f32 = 6.0;
+
+pub fn repair(
+    time: Res<Time>,
+    hqs: Query<(&Transform, &Team), With<Hq>>,
+    mut q: Query<(&Transform, &Team, &mut Health), (With<Unit>, Without<AttackTarget>)>,
+) {
+    for (t, team, mut h) in &mut q {
+        if h.hp >= h.max {
+            continue;
+        }
+        if hqs.iter().any(|(ht, hteam)| hteam == team && dist2d(ht.translation, t.translation) < REPAIR_RANGE) {
+            h.hp = (h.hp + REPAIR_RATE * time.delta_secs()).min(h.max);
+        }
+    }
+}
+
 /// Fahrdaten fortschreiben: Strecke, Tempo, Rückstoß. Dazu Staubfahne und Fahrspuren.
 pub fn vehicle_motion(
     time: Res<Time>,

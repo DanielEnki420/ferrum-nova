@@ -7,7 +7,7 @@ use crate::construction::{can_place, construct, place_buildings, PlaceRequest, S
 use crate::fx::FxEvent;
 use crate::models::ModelKit;
 use crate::terrain::{self, FIELDS};
-use crate::units::{enqueue_builds, harvest, movement, snapshot, BuildRequest, Snapshot};
+use crate::units::{enqueue_builds, harvest, movement, separation, snapshot, BuildRequest, Snapshot};
 use bevy::prelude::*;
 use bevy::time::TimeUpdateStrategy;
 use std::time::Duration;
@@ -126,8 +126,8 @@ fn unfinished_refinery_is_ignored() {
     assert!(flat(target).distance(flat(PLAYER_HQ_POS)) < 0.5, "Ziel sollte das HQ sein, ist aber {target}");
 }
 
-/// Die Gegner-KI errichtet im Lauf von gut fünf Minuten Raffinerie, Geschütztürme und Fabrik
-/// an gültigen Plätzen, und alle werden fertig
+/// Die Gegner-KI errichtet im Lauf von gut fünf Minuten Raffinerie, Geschütztürme, Fabrik und
+/// einen gesicherten Außenposten an einem weiteren Feld, alles an gültigen Plätzen und fertig
 #[test]
 fn ai_builds_its_base() {
     let mut app = app();
@@ -149,7 +149,7 @@ fn ai_builds_its_base() {
         .map(|(_, s, t, c)| (s.0, t.translation, c.is_none()))
         .collect();
     let count = |k: BuildingKind| built.iter().filter(|b| b.0 == k).count();
-    assert_eq!(count(BuildingKind::Raffinerie), 1, "Raffinerie: {built:?}");
+    assert_eq!(count(BuildingKind::Raffinerie), 2, "Raffinerien: {built:?}");
     assert!(count(BuildingKind::Geschuetzturm) >= 2, "Geschütztürme: {built:?}");
     assert_eq!(count(BuildingKind::Fabrik), 1, "Fabrik: {built:?}");
     assert!(built.iter().all(|b| b.2), "nicht alles fertig: {built:?}");
@@ -165,10 +165,17 @@ fn ai_builds_its_base() {
         let others: Vec<Site> = sites.iter().filter(|(p, _)| p.distance(*pos) > 0.01).map(|(_, s)| *s).collect();
         assert!(can_place(*kind, *pos, ENEMY, &others, &nodes), "{kind:?} bei {pos} steht ungültig");
     }
-    // Die Raffinerie liegt näher am nächsten Feld als das HQ
-    let refinery = built.iter().find(|b| b.0 == BuildingKind::Raffinerie).unwrap().1;
+    // Die Raffinerien liegen näher an einem Feld als das HQ
     let nearest = |p: Vec3| nodes.iter().map(|n| flat(*n).distance(flat(p))).fold(f32::MAX, f32::min);
-    assert!(nearest(refinery) < nearest(ENEMY_HQ_POS), "Raffinerie liegt nicht näher am Feld");
+    for r in built.iter().filter(|b| b.0 == BuildingKind::Raffinerie) {
+        assert!(nearest(r.1) < nearest(ENEMY_HQ_POS), "Raffinerie bei {} liegt nicht näher am Feld", r.1);
+    }
+    // Der Außenposten weit vor dem HQ hat einen Geschützturm in der Nähe
+    let outpost = built.iter().find(|b| b.0 == BuildingKind::Raffinerie && b.1.distance(ENEMY_HQ_POS) > 30.0).expect("kein Außenposten").1;
+    assert!(
+        built.iter().any(|b| b.0 == BuildingKind::Geschuetzturm && b.1.distance(outpost) < 14.0),
+        "Außenposten ohne Geschützturm: {built:?}"
+    );
 }
 
 /// Ein zerstörtes HQ zählt sofort als verloren, das Modell stürzt danach ein
@@ -204,4 +211,317 @@ fn destroyed_building_collapses_into_rubble() {
     let world = app.world_mut();
     assert_eq!(world.query::<&Collapse>().iter(world).count(), 0, "Einsturz endet nicht");
     assert_eq!(world.query::<&Wreck>().iter(world).count(), 1, "kein Trümmerhaufen");
+}
+
+// ---------------------------------------------------------------- Gegner-KI
+
+use crate::ai::{ai_tactics, choose_unit, AiRetreat, AiRole, Seen, WavePhase};
+use crate::units::repair;
+
+/// Einheit ohne Modell, nur mit den Spielkomponenten
+fn unit(app: &mut App, team: Team, kind: UnitKind, pos: Vec3, hp_frac: f32) -> Entity {
+    let (hp, speed, radius, range) = match kind {
+        UnitKind::Sammler => (160.0, 7.0, 1.3, 0.0),
+        UnitKind::Panzer => (220.0, 6.0, 1.4, 11.0),
+        UnitKind::Werfer => (140.0, 4.8, 1.3, 19.0),
+        UnitKind::Spaeher => (110.0, 10.0, 1.3, 12.0),
+        UnitKind::Bollwerk => (520.0, 4.0, 1.9, 13.0),
+        UnitKind::Haubitze => (150.0, 4.2, 1.5, 27.0),
+    };
+    let mut e = app.world_mut().spawn((
+        Transform::from_translation(terrain::on_ground(pos)),
+        team,
+        Health { hp: hp * hp_frac, max: hp },
+        Unit { kind, speed, radius },
+        Heading(0.0),
+    ));
+    if kind == UnitKind::Sammler {
+        e.insert(Harvester { state: HarvestState::Idle, node: None, cargo: 0, cargo_kind: ResKind::Ferrit });
+    } else {
+        e.insert(Weapon { range, damage: 10.0, cooldown: 1.0, timer: 0.0, projectile_speed: 30.0, rocket: false, splash: 0.0, arc: 0.0 });
+    }
+    e.id()
+}
+
+fn pos_of(app: &App, e: Entity) -> Vec3 {
+    app.world().get::<Transform>(e).unwrap().translation
+}
+
+/// Konter: gegen Geschütztürme Artillerie, gegen viel Panzerung Raketen und schwere Panzer
+#[test]
+fn ai_counters_what_it_sees() {
+    let none = [0usize; 6];
+    let mut army = [0usize; 6];
+    army[UnitKind::Panzer.idx()] = 3;
+    army[UnitKind::Werfer.idx()] = 2;
+    army[UnitKind::Spaeher.idx()] = 1;
+    assert_eq!(choose_unit(&army, &none, 3, true), UnitKind::Haubitze, "Türme mit Fabrik");
+    assert_eq!(choose_unit(&army, &none, 3, false), UnitKind::Werfer, "Türme ohne Fabrik");
+    let mut armor = [0usize; 6];
+    armor[UnitKind::Bollwerk.idx()] = 4;
+    armor[UnitKind::Panzer.idx()] = 4;
+    let pick = choose_unit(&army, &armor, 0, true);
+    assert!(matches!(pick, UnitKind::Bollwerk | UnitKind::Werfer), "gegen Panzerung: {pick:?}");
+    let mut arty = [0usize; 6];
+    arty[UnitKind::Haubitze.idx()] = 5;
+    let mut no_scouts = army;
+    no_scouts[UnitKind::Spaeher.idx()] = 0;
+    assert_eq!(choose_unit(&no_scouts, &arty, 0, false), UnitKind::Spaeher, "gegen Artillerie");
+}
+
+/// Sammler fliehen vor bewaffneten Gegnern zur Abladestelle
+#[test]
+fn harvester_flees_from_attackers() {
+    let mut app = app();
+    app.insert_resource(Stock([[0, 0], [0, 0]]));
+    app.add_systems(Update, (snapshot, enemy_ai, movement).chain());
+    spawn_hq(&mut app, ENEMY, ENEMY_HQ_POS);
+    let field = Vec3::new(28.0, 0.0, -50.0);
+    let sammler = unit(&mut app, ENEMY, UnitKind::Sammler, field + Vec3::new(2.0, 0.0, 0.0), 1.0);
+    let raider = unit(&mut app, PLAYER, UnitKind::Panzer, field + Vec3::new(-6.0, 0.0, 0.0), 1.0);
+    app.update();
+    let target = app.world().get::<MoveTo>(sammler).expect("Sammler flieht nicht").0;
+    assert!(flat(target).distance(flat(ENEMY_HQ_POS)) < 1.0, "flieht nicht zum HQ, sondern nach {target}");
+    let d0 = flat(pos_of(&app, sammler)).distance(flat(pos_of(&app, raider)));
+    for _ in 0..20 {
+        app.update();
+    }
+    let d1 = flat(pos_of(&app, sammler)).distance(flat(pos_of(&app, raider)));
+    assert!(d1 > d0 + 5.0, "Abstand wächst nicht: {d0} -> {d1}");
+}
+
+/// Greift der Spieler die Basis an, rückt die Reserve dorthin aus
+#[test]
+fn reserve_defends_base() {
+    let mut app = app();
+    app.insert_resource(Stock([[0, 0], [0, 0]]));
+    app.add_systems(Update, (snapshot, enemy_ai).chain());
+    spawn_hq(&mut app, ENEMY, ENEMY_HQ_POS);
+    let rally = crate::ai::rally();
+    let guards: Vec<Entity> = (0..3)
+        .map(|i| {
+            let e = unit(&mut app, ENEMY, UnitKind::Panzer, rally + Vec3::X * i as f32 * 3.0, 1.0);
+            app.world_mut().entity_mut(e).insert(AiRole::Reserve);
+            e
+        })
+        .collect();
+    let raid = ENEMY_HQ_POS + Vec3::new(-6.0, 0.0, 18.0);
+    unit(&mut app, PLAYER, UnitKind::Panzer, raid, 1.0);
+    app.update();
+    assert!(app.world().resource::<AiState>().threat.is_some(), "Bedrohung nicht erkannt");
+    for g in guards {
+        assert_eq!(app.world().get::<AiRole>(g), Some(&AiRole::Defend));
+        let to = app.world().get::<MoveTo>(g).expect("Verteidiger ohne Marschbefehl").0;
+        assert!(flat(to).distance(flat(raid)) < 6.0, "Verteidiger fährt nach {to} statt zum Angreifer");
+        assert!(app.world().get::<AttackMove>(g).is_some(), "Verteidiger fährt ohne Angriffsmarsch");
+    }
+}
+
+/// Eine Welle sammelt sich, rückt geschlossen vor und zieht sich zurück, wenn sie zu schwach wird
+#[test]
+fn wave_gathers_advances_and_retreats() {
+    let mut app = app();
+    app.insert_resource(Stock([[0, 0], [0, 0]]));
+    app.add_systems(Update, (snapshot, enemy_ai, movement, separation).chain());
+    spawn_hq(&mut app, ENEMY, ENEMY_HQ_POS);
+    spawn_hq(&mut app, PLAYER, PLAYER_HQ_POS);
+    app.world_mut().resource_mut::<AiState>().next_attack = 0.0;
+    let rally = crate::ai::rally();
+    let kinds = [UnitKind::Panzer, UnitKind::Panzer, UnitKind::Werfer, UnitKind::Bollwerk, UnitKind::Spaeher];
+    let army: Vec<Entity> = kinds
+        .iter()
+        .enumerate()
+        .map(|(i, k)| {
+            let e = unit(&mut app, ENEMY, *k, rally + Vec3::new(i as f32 * 2.5 - 5.0, 0.0, 0.0), 1.0);
+            // der Späher ist schon Reserve, sonst würde er Kundschafter
+            app.world_mut().entity_mut(e).insert(AiRole::Reserve);
+            e
+        })
+        .collect();
+    app.update();
+    {
+        let ai = app.world().resource::<AiState>();
+        let w = ai.wave.as_ref().expect("keine Welle gebildet");
+        assert_eq!(w.members.len(), 5);
+        assert_eq!(w.phase, WavePhase::Gather);
+    }
+    for _ in 0..300 {
+        app.update();
+    }
+    let ai = app.world().resource::<AiState>();
+    assert_eq!(ai.wave.as_ref().map(|w| w.phase), Some(WavePhase::Advance), "Welle rückt nicht vor");
+    let pts: Vec<Vec3> = army.iter().map(|e| flat(pos_of(&app, *e))).collect();
+    let centroid = pts.iter().sum::<Vec3>() / pts.len() as f32;
+    assert!(centroid.distance(flat(ENEMY_HQ_POS)) > flat(rally).distance(flat(ENEMY_HQ_POS)) + 15.0, "Welle kommt nicht voran: {centroid}");
+    let spread = pts.iter().map(|p| p.distance(centroid)).fold(0.0, f32::max);
+    assert!(spread < 14.0, "Welle zerfasert: größter Abstand {spread}");
+
+    // schwere Verluste: Rückzug
+    for e in &army[..4] {
+        app.world_mut().get_mut::<Health>(*e).unwrap().hp *= 0.1;
+    }
+    for _ in 0..10 {
+        app.update();
+    }
+    assert!(app.world().resource::<AiState>().wave.is_none(), "Welle löst sich nicht auf");
+    for e in &army {
+        assert_eq!(app.world().get::<AiRole>(*e), Some(&AiRole::Reserve));
+        let to = app.world().get::<MoveTo>(*e).expect("kein Rückzugsbefehl").0;
+        assert!(flat(to).distance(flat(rally)) < 8.0, "Rückzug nach {to} statt zum Sammelpunkt");
+    }
+}
+
+/// Schwer beschädigte Einheiten fahren zum HQ und werden dort repariert
+#[test]
+fn damaged_unit_retreats_and_repairs() {
+    let mut app = app();
+    app.add_systems(Update, (snapshot, ai_tactics, movement, repair).chain());
+    spawn_hq(&mut app, ENEMY, ENEMY_HQ_POS);
+    let tank = unit(&mut app, ENEMY, UnitKind::Panzer, ENEMY_HQ_POS + Vec3::new(-25.0, 0.0, 25.0), 0.2);
+    app.update();
+    assert!(app.world().get::<AiRetreat>(tank).is_some(), "kein Rückzug");
+    for _ in 0..500 {
+        app.update();
+    }
+    let h = app.world().get::<Health>(tank).unwrap();
+    assert!(h.hp / h.max > 0.85, "nicht repariert: {}/{}", h.hp, h.max);
+    assert!(app.world().get::<AiRetreat>(tank).is_none(), "bleibt im Rückzug");
+    assert!(flat(pos_of(&app, tank)).distance(flat(ENEMY_HQ_POS)) < crate::units::REPAIR_RANGE);
+}
+
+/// Haubitzen weichen bewaffneten Gegnern aus, die ihnen zu nahe kommen
+#[test]
+fn howitzer_keeps_distance() {
+    let mut app = app();
+    app.add_systems(Update, (snapshot, ai_tactics, movement).chain());
+    let gun = unit(&mut app, ENEMY, UnitKind::Haubitze, Vec3::new(20.0, 0.0, -20.0), 1.0);
+    let raider = unit(&mut app, PLAYER, UnitKind::Spaeher, Vec3::new(14.0, 0.0, -16.0), 1.0);
+    let d0 = flat(pos_of(&app, gun)).distance(flat(pos_of(&app, raider)));
+    for _ in 0..25 {
+        app.update();
+    }
+    let d1 = flat(pos_of(&app, gun)).distance(flat(pos_of(&app, raider)));
+    assert!(d1 > d0 + 3.0 && d1 > 9.0, "Haubitze weicht nicht aus: {d0} -> {d1}");
+}
+
+/// Der Späher erkundet die Karte, und die KI merkt sich, was er sieht
+#[test]
+fn scout_explores_and_remembers() {
+    let mut app = app();
+    app.insert_resource(Stock([[0, 0], [0, 0]]));
+    app.add_systems(Update, (snapshot, enemy_ai, movement).chain());
+    spawn_hq(&mut app, ENEMY, ENEMY_HQ_POS);
+    spawn_hq(&mut app, PLAYER, PLAYER_HQ_POS);
+    let scout = unit(&mut app, ENEMY, UnitKind::Spaeher, ENEMY_HQ_POS + Vec3::new(-6.0, 0.0, 6.0), 1.0);
+    // ein Spielerturm am mittleren Ferritfeld, weit außer Sicht der Basis
+    let turret = app
+        .world_mut()
+        .spawn((
+            Transform::from_translation(terrain::on_ground(Vec3::new(8.0, 0.0, -8.0))),
+            PLAYER,
+            Health { hp: 500.0, max: 500.0 },
+            Building { radius: 1.9 },
+            Structure(BuildingKind::Geschuetzturm),
+        ))
+        .id();
+    app.update();
+    assert_eq!(app.world().get::<AiRole>(scout), Some(&AiRole::Scout));
+    assert!(!app.world().resource::<AiState>().intel.contains_key(&turret), "Turm schon vor dem Erkunden bekannt");
+    for _ in 0..900 {
+        app.update();
+    }
+    let ai = app.world().resource::<AiState>();
+    let s = ai.intel.get(&turret).expect("Späher hat den Turm nicht entdeckt");
+    assert_eq!(s.what, Seen::Structure(BuildingKind::Geschuetzturm));
+    assert!(ai.scout_leg >= 3, "Späher kommt nicht herum: {} Wegpunkte", ai.scout_leg);
+}
+
+/// Ganze Partie im Zeitraffer (bis 15 Minuten) gegen einen Spieler, der sich nur mit vier
+/// Geschütztürmen verteidigt: Die KI baut ihre Wirtschaft aus, erkundet,
+/// greift in Wellen an und setzt der Spielerbasis zu
+#[test]
+fn full_match_ai_builds_up_and_attacks() {
+    use crate::fx::{update_collapse, FxKit};
+    use crate::units::{auto_target, check_outcome, combat, deaths, production, projectiles};
+    use crate::world::spawn_unit;
+    let mut app = app();
+    let mut meshes = Assets::<Mesh>::default();
+    let mut mats = Assets::<StandardMaterial>::default();
+    let mut images = Assets::<Image>::default();
+    app.insert_resource(FxKit::new(&mut meshes, &mut mats, &mut images));
+    app.insert_resource(Stock([[400, 150], [400, 150]]));
+    app.add_systems(
+        Update,
+        (
+            (enemy_ai, ai_tactics, enqueue_builds, place_buildings, construct).chain(),
+            (snapshot, auto_target, combat, movement, separation, harvest, projectiles, production, repair, deaths, check_outcome, update_collapse).chain(),
+        )
+            .chain(),
+    );
+    spawn_hq(&mut app, PLAYER, PLAYER_HQ_POS);
+    spawn_hq(&mut app, ENEMY, ENEMY_HQ_POS);
+    spawn_fields(&mut app);
+    app.world_mut().resource_scope(|world, kit: Mut<ModelKit>| {
+        let mut c = world.commands();
+        for i in 0..2 {
+            let o = i as f32 * 2.8;
+            spawn_unit(&mut c, &kit, PLAYER, UnitKind::Sammler, PLAYER_HQ_POS + Vec3::new(7.0 + o, 0.0, -7.0));
+            spawn_unit(&mut c, &kit, ENEMY, UnitKind::Sammler, ENEMY_HQ_POS + Vec3::new(-7.0 - o, 0.0, 7.0));
+        }
+        for i in 0..3 {
+            let o = i as f32 * 2.8;
+            spawn_unit(&mut c, &kit, PLAYER, UnitKind::Panzer, PLAYER_HQ_POS + Vec3::new(9.0 + o, 0.0, -1.0));
+            spawn_unit(&mut c, &kit, ENEMY, UnitKind::Panzer, ENEMY_HQ_POS + Vec3::new(-9.0 - o, 0.0, 1.0));
+        }
+    });
+    app.world_mut().flush();
+    // Verteidigungsring aus fertigen Geschütztürmen vor dem Spieler-HQ
+    app.world_mut().resource_scope(|world, kit: Mut<ModelKit>| {
+        let mut c = world.commands();
+        for (x, z) in [(12.0, -2.0), (2.0, -12.0), (14.0, -14.0), (-4.0, -8.0)] {
+            let e = crate::construction::spawn_structure(&mut c, &kit, PLAYER, BuildingKind::Geschuetzturm, PLAYER_HQ_POS + Vec3::new(x, 0.0, z));
+            let hp = BuildingKind::Geschuetzturm.hp();
+            c.entity(e).remove::<Construction>().insert(Health { hp, max: hp });
+        }
+    });
+    app.world_mut().flush();
+
+    let (mut waves, mut max_harv, mut was_wave) = (0, 0, false);
+    let mut kinds_built = std::collections::HashSet::new();
+    for step in 0..9000 {
+        app.update();
+        if step % 10 != 0 {
+            continue;
+        }
+        let world = app.world_mut();
+        let has_wave = world.resource::<AiState>().wave.is_some();
+        if has_wave && !was_wave {
+            waves += 1;
+        }
+        was_wave = has_wave;
+        let mut q = world.query::<(&Team, &Unit)>();
+        let harv = q.iter(world).filter(|(t, u)| **t == ENEMY && u.kind == UnitKind::Sammler).count();
+        max_harv = max_harv.max(harv);
+        for (t, u) in q.iter(world) {
+            if *t == ENEMY {
+                kinds_built.insert(u.kind);
+            }
+        }
+        if *world.resource::<Outcome>() != Outcome::Running {
+            break;
+        }
+    }
+    let world = app.world_mut();
+    let outcome = *world.resource::<Outcome>();
+    let mut hq = world.query::<(&Team, &Health, &Hq)>();
+    let player_hq = hq.iter(world).find(|(t, ..)| **t == PLAYER).map(|(_, h, _)| h.hp / h.max);
+    let minutes = world.resource::<AiState>().elapsed / 60.0;
+    println!("Nach {minutes:.1} min: Wellen {waves}, Sammler max {max_harv}, Typen {kinds_built:?}, Ausgang {outcome:?}, Spieler-HQ {player_hq:?}");
+    assert!(max_harv >= 5, "Wirtschaft wächst nicht: höchstens {max_harv} Sammler");
+    assert!(waves >= 1, "keine Angriffswelle");
+    assert!(kinds_built.contains(&UnitKind::Spaeher), "kein Späher gebaut");
+    assert!(
+        outcome == Outcome::Lost || player_hq.is_some_and(|f| f < 0.8),
+        "Angriffe zeigen keine Wirkung: Ausgang {outcome:?}, Spieler-HQ {player_hq:?}"
+    );
 }
