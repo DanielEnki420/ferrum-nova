@@ -4,6 +4,13 @@ Ein eigenes Echtzeitstrategie-Spiel in **Rust + Bevy 0.20**. Es läuft als WebAs
 
 **Eine Hommage an Thandor.** Ferrum Nova ist eine Verbeugung vor *Thandor – Die Invasion*, dem Echtzeitstrategie-Spiel des Hannoveraner Studios Innonics aus dem Jahr 2000 (Vertrieb: JoWooD). Von dort stammt die Lust auf schwere Fahrzeuge, Basisbau und Gefechte auf einer fremden Welt. Ferrum Nova ist aber kein Nachbau: Welt, Geschichte, Einheiten, Grafik und Klänge sind eigenständig entstanden. Name und Inhalte von Thandor gehören ihren Rechteinhabern.
 
+## Jetzt spielen (Version 0.1)
+
+- **Im Browser gegen VAAR:** https://danielenki420.github.io/ferrum-nova/. Läuft direkt, ohne Installation und Anmeldung. Am besten in einem aktuellen Chrome, Edge oder Firefox am Desktop.
+- **Duell 1 gegen 1:** Auf der Testversion bei Cloudflare mit Einladungslink. Sie ist passwortgeschützt, das Passwort gibt es auf Anfrage. „Duell erstellen“ auf GitHub Pages leitet dorthin weiter.
+
+Neu in 0.1: lernender Gegner VAAR, Halkyon-Finsternis, Zeitsprung 1996/2026 (Taste Z), Kampagne und das Live-Duell über einen Einladungslink.
+
 ```
 game/   Spiel (Rust, Bevy). Läuft nativ oder mit Trunk als WebAssembly
 web/    Website (Astro). Landingpage + /spielen mit dem eingebetteten Spiel
@@ -154,3 +161,7 @@ Danach kennt das Pages-Projekt die Klasse über die Bindung in `web/wrangler.tom
 - Duell: Wiederverbinden, Zuschauer, mehr als zwei Spieler
 - Texturen als KTX2 (GPU-komprimiert) statt JPG, sobald KTX-Software verfügbar ist
 - Eigene Schriftart mit Umlauten für das HUD (die eingebaute Bevy-Schrift kann keine Umlaute)
+
+## Lizenz
+
+Der Code steht unter der [MIT-Lizenz](LICENSE). Die Bodentexturen sind CC0 (siehe [CREDITS.md](CREDITS.md)).

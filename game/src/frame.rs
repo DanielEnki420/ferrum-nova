@@ -168,6 +168,10 @@ impl MatchConfig {
 }
 
 /// Neu beginnen mit diesen Einstellungen
+/// Adresse des Spiels mit Duell-Server (Cloudflare Pages, passwortgeschützt)
+#[cfg(target_arch = "wasm32")]
+const DUEL_HOME: &str = "https://ferrum-nova.pages.dev/play/";
+
 fn relaunch(cfg: &MatchConfig) {
     #[cfg(target_arch = "wasm32")]
     {
@@ -176,6 +180,12 @@ fn relaunch(cfg: &MatchConfig) {
             && let Some(el) = doc.get_element_by_id("loading")
         {
             let _ = el.set_attribute("style", "");
+        }
+        // GitHub Pages hat keinen Duell-Server: Duelle laufen auf der Testversion bei Cloudflare
+        let host = win.location().hostname().unwrap_or_default();
+        if cfg.duell.is_some() && host.ends_with(".github.io") {
+            let _ = win.location().assign(&format!("{DUEL_HOME}{}", cfg.query()));
+            return;
         }
         let path = win.location().pathname().unwrap_or_default();
         let _ = win.location().replace(&format!("{path}{}", cfg.query()));

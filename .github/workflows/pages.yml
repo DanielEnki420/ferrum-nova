@@ -1,0 +1,51 @@
+# Spiel bauen und auf GitHub Pages veröffentlichen (Einzelspieler gegen VAAR).
+# Duelle brauchen den Duell-Server und laufen auf der Testversion bei Cloudflare.
+name: GitHub Pages
+
+on:
+  push:
+    branches: [main]
+    paths: ["game/**", ".github/workflows/pages.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: game
+      - name: Trunk installieren
+        run: |
+          curl -sSL https://github.com/trunk-rs/trunk/releases/download/v0.22.2/trunk-x86_64-unknown-linux-gnu.tar.gz | tar -xz -C /usr/local/bin
+          trunk --version
+      - name: Spiel bauen
+        working-directory: game
+        run: trunk build --release --dist ../site --public-url /ferrum-nova/
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
