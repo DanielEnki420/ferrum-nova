@@ -170,3 +170,38 @@ fn ai_builds_its_base() {
     let nearest = |p: Vec3| nodes.iter().map(|n| flat(*n).distance(flat(p))).fold(f32::MAX, f32::min);
     assert!(nearest(refinery) < nearest(ENEMY_HQ_POS), "Raffinerie liegt nicht näher am Feld");
 }
+
+/// Ein zerstörtes HQ zählt sofort als verloren, das Modell stürzt danach ein
+/// und hinterlässt einen Trümmerhaufen
+#[test]
+fn destroyed_building_collapses_into_rubble() {
+    use crate::fx::{update_collapse, Collapse, FxKit, Wreck};
+    use crate::units::{check_outcome, deaths};
+    let mut app = app();
+    let mut meshes = Assets::<Mesh>::default();
+    let mut mats = Assets::<StandardMaterial>::default();
+    let mut images = Assets::<Image>::default();
+    app.insert_resource(FxKit::new(&mut meshes, &mut mats, &mut images));
+    app.add_systems(Update, (deaths, check_outcome, update_collapse).chain());
+    spawn_hq(&mut app, PLAYER, PLAYER_HQ_POS);
+    spawn_hq(&mut app, ENEMY, ENEMY_HQ_POS);
+    let mut q = app.world_mut().query::<(&Team, &mut Health)>();
+    for (team, mut h) in q.iter_mut(app.world_mut()) {
+        if *team == PLAYER {
+            h.hp = 0.0;
+        }
+    }
+
+    app.update();
+    assert_eq!(*app.world().resource::<Outcome>(), Outcome::Lost, "HQ-Verlust nicht erkannt");
+    let world = app.world_mut();
+    assert_eq!(world.query::<&Collapse>().iter(world).count(), 1, "kein Einsturz gestartet");
+
+    // Einsturz dauert knapp drei Sekunden; die Animation rechnet mit höchstens 0,05 s je Schritt
+    for _ in 0..80 {
+        app.update();
+    }
+    let world = app.world_mut();
+    assert_eq!(world.query::<&Collapse>().iter(world).count(), 0, "Einsturz endet nicht");
+    assert_eq!(world.query::<&Wreck>().iter(world).count(), 1, "kein Trümmerhaufen");
+}

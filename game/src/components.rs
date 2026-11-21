@@ -116,6 +116,53 @@ impl UnitKind {
             _ => (2.2, 1.05),
         }
     }
+    /// Waffenklasse für Geschoss und Effekte
+    pub fn caliber(self) -> Caliber {
+        match self {
+            UnitKind::Spaeher => Caliber::Light,
+            UnitKind::Bollwerk => Caliber::Heavy,
+            UnitKind::Haubitze => Caliber::Artillery,
+            UnitKind::Werfer => Caliber::Rocket,
+            _ => Caliber::Medium,
+        }
+    }
+}
+
+/// Waffenklasse: bestimmt Mündungsfeuer, Geschoss und Einschlag
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Caliber {
+    /// Maschinenkanone (Späher)
+    Light,
+    /// Kampfpanzer und Geschützturm
+    Medium,
+    /// schwere Kanone (Bollwerk)
+    Heavy,
+    /// Haubitze
+    Artillery,
+    Rocket,
+}
+
+impl Caliber {
+    /// Größenfaktor der Effekte
+    pub fn scale(self) -> f32 {
+        match self {
+            Caliber::Light => 0.45,
+            Caliber::Medium => 1.0,
+            Caliber::Heavy => 1.45,
+            Caliber::Artillery => 2.6,
+            Caliber::Rocket => 2.2,
+        }
+    }
+}
+
+/// Worauf ein Geschoss trifft
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Surface {
+    Ground,
+    /// Fahrzeugpanzerung
+    Armor,
+    /// Gebäude
+    Concrete,
 }
 
 #[derive(Component)]
@@ -356,6 +403,7 @@ pub struct Projectile {
     pub team: Team,
     pub splash: f32,
     pub arc: f32,
+    pub caliber: Caliber,
     /// Position auf der geraden Bahn (ohne Bogen)
     pub base: Vec3,
     pub traveled: f32,
@@ -378,7 +426,7 @@ impl Stock {
     }
 }
 
-#[derive(Resource, Default, PartialEq, Eq, Clone, Copy)]
+#[derive(Resource, Default, PartialEq, Eq, Clone, Copy, Debug)]
 pub enum Outcome {
     #[default]
     Running,

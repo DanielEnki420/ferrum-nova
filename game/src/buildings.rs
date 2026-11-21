@@ -272,6 +272,8 @@ pub struct StructMeshes {
     pub spin: Option<(Handle<Mesh>, Vec3)>,
     /// So tief steckt das Gebäude zu Baubeginn im Boden
     pub height: f32,
+    /// Schornsteinmündungen (lokal) und ob dort Dampf (sonst Rauch) austritt
+    pub vents: Vec<(Vec3, bool)>,
 }
 
 /// Quader zwischen zwei Punkten (Träger, Streben)
@@ -405,6 +407,7 @@ pub fn build_turret(team: Team, meshes: &mut Assets<Mesh>) -> StructMeshes {
         head: Some((meshes.add(h.build().expect("Kopf")), meshes.add(hg.build().expect("Kopf-Licht")), Vec3::Y * (top + 1.3))),
         spin: None,
         height: 3.4,
+        vents: Vec::new(),
     }
 }
 
@@ -527,6 +530,7 @@ pub fn build_refinery(team: Team, meshes: &mut Assets<Mesh>) -> StructMeshes {
         head: None,
         spin: None,
         height: 5.8,
+        vents: vec![(ch + Vec3::Y * 5.55, true)],
     }
 }
 
@@ -598,8 +602,10 @@ pub fn build_factory(team: Team, meshes: &mut Assets<Mesh>) -> StructMeshes {
     g.cuboid(Vec3::new(cx + 2.25, 1.7, gz + 0.025), Vec3::new(0.1, 0.45, 0.01), Quat::IDENTITY, p.paint_dark);
 
     // --- Schornsteine durchs Dach
+    let mut vents = Vec::new();
     for (x, h) in [(0.9f32, 6.2f32), (1.6, 5.6)] {
         let c = Vec3::new(x, 0.0, cz - d / 2.0 + 0.55);
+        vents.push((c + Vec3::Y * (h + 0.1), false));
         g.cyl(c + Vec3::Y * (h / 2.0 + 0.5), 0.22, h - 1.0, Vec3::Y, 14, concrete);
         for (y, col) in [(h - 0.9, p.paint_dark), (h - 0.45, p.marking), (h - 0.05, p.paint_dark)] {
             g.cyl(c + Vec3::Y * y, 0.24, 0.12, Vec3::Y, 14, col);
@@ -656,5 +662,6 @@ pub fn build_factory(team: Team, meshes: &mut Assets<Mesh>) -> StructMeshes {
         head: None,
         spin: Some((meshes.add(fan.build().expect("Lüfter")), ac + Vec3::Y * 1.3)),
         height: 6.6,
+        vents,
     }
 }

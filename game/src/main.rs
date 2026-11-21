@@ -104,6 +104,8 @@ fn main() {
                 fx::spawn_effects,
                 fx::update_fx,
                 fx::update_wrecks,
+                fx::update_collapse,
+                fx::ambient_fx,
                 units::spin_wheels,
                 units::vehicle_visuals,
                 models::pulse_lights,

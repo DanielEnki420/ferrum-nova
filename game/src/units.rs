@@ -117,10 +117,14 @@ pub fn combat(
         let aim = aim_point(tgt);
         let vel = (aim - from).normalize_or_zero();
         let t_idx = team.0 as usize;
-        let (mat, scale) = if w.rocket {
-            (kit.rocket_mat[t_idx].clone(), Vec3::new(2.4, 0.8, 2.4))
-        } else {
-            (kit.tracer_mat[t_idx].clone(), Vec3::ONE)
+        let caliber = if w.rocket { Caliber::Rocket } else { unit.map_or(Caliber::Medium, |u| u.kind.caliber()) };
+        // Geschossform je Kaliber: dünne Leuchtspur bis dicke Granate
+        let (mat, scale) = match caliber {
+            Caliber::Rocket => (kit.rocket_mat[t_idx].clone(), Vec3::new(2.4, 0.8, 2.4)),
+            Caliber::Light => (kit.tracer_mat[t_idx].clone(), Vec3::new(0.6, 0.75, 0.6)),
+            Caliber::Medium => (kit.tracer_mat[t_idx].clone(), Vec3::ONE),
+            Caliber::Heavy => (kit.tracer_mat[t_idx].clone(), Vec3::new(1.5, 1.25, 1.5)),
+            Caliber::Artillery => (kit.tracer_mat[t_idx].clone(), Vec3::new(2.0, 0.8, 2.0)),
         };
         commands.spawn((
             Mesh3d(kit.tracer.clone()),
@@ -138,13 +142,14 @@ pub fn combat(
                 team: *team,
                 splash: w.splash,
                 arc: w.arc,
+                caliber,
                 base: from,
                 traveled: 0.0,
                 total: from.distance(aim).max(1.0),
             },
         ));
         if !w.rocket {
-            fx.write(FxEvent::Muzzle { pos: from, dir: vel });
+            fx.write(FxEvent::Muzzle { pos: from, dir: vel, caliber });
         } else {
             fx.write(FxEvent::Launch { pos: from, dir: vel });
         }
@@ -405,7 +410,15 @@ pub fn projectiles(
             } else if let Ok(mut h) = health.get_mut(p.target) {
                 h.hp -= p.damage;
             }
-            fx.write(FxEvent::Impact { pos: p.base, rocket: p.rocket || p.splash > 0.0 });
+            // Flächenschaden schlägt im Boden ein, sonst trifft das Geschoss das Ziel selbst
+            let surface = if p.splash > 0.0 {
+                Surface::Ground
+            } else if tgt.is_building {
+                Surface::Concrete
+            } else {
+                Surface::Armor
+            };
+            fx.write(FxEvent::Impact { pos: p.base, caliber: p.caliber, surface });
             commands.entity(e).try_despawn();
             continue;
         }
@@ -438,11 +451,20 @@ pub fn deaths(
     q: Query<(Entity, &Health, &Transform, Option<&Building>, Option<&Unit>, Option<&Team>)>,
 ) {
     for (e, h, t, building, unit, team) in &q {
-        let building = building.is_some_and(|b| b.radius > 2.5);
-        if h.hp <= 0.0 {
-            let wreck = unit.zip(team).map(|(u, team)| crate::fx::WreckInfo { kind: u.kind, team: *team, rot: t.rotation });
-            fx.write(FxEvent::Death { pos: t.translation, big: building, wreck });
-            commands.entity(e).try_despawn();
+        if h.hp > 0.0 {
+            continue;
+        }
+        let wreck = unit.zip(team).map(|(u, team)| crate::fx::WreckInfo { kind: u.kind, team: *team, rot: t.rotation });
+        fx.write(FxEvent::Death { pos: t.translation, big: building.is_some_and(|b| b.radius > 2.5), wreck });
+        match building {
+            // Gebäude scheiden sofort aus dem Spiel aus, das Modell stürzt aber erst noch ein
+            Some(b) => {
+                commands
+                    .entity(e)
+                    .remove::<(Team, Health, Building, Structure, Hq, Depot, Weapon, AttackTarget, TurretRef, RisePivot, Construction, Selected)>()
+                    .insert(crate::fx::Collapse::new(t, b.radius));
+            }
+            None => commands.entity(e).try_despawn(),
         }
     }
 }

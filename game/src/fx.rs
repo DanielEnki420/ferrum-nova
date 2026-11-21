@@ -6,11 +6,16 @@
 //!   damit gleichartige Partikel zusammen gezeichnet werden können.
 //! - Trümmer fliegen ballistisch, prallen vom Gelände ab und bleiben liegen.
 //! - Zerstörte Fahrzeuge hinterlassen ein ausgebranntes Wrack, das eine Weile brennt und qualmt.
+//! - Jede Waffenklasse hat eigenes Mündungsfeuer und eigene Einschläge (Boden, Panzerung, Beton).
+//! - Zerstörte Gebäude stürzen in mehreren Explosionen ein und hinterlassen einen Trümmerhaufen.
+//! - Umgebung: Schornsteine dampfen und rauchen, auf Baustellen sprühen Schweißfunken,
+//!   über Plasmaquellen steigen leuchtende Teilchen auf.
 
 use crate::components::*;
 use crate::input::MainCamera;
 use crate::models::ModelKit;
 use crate::terrain;
+use crate::vehicles::{lin, Geo};
 use bevy::asset::RenderAssetUsages;
 use bevy::image::{ImageSampler, ImageSamplerDescriptor};
 use bevy::light::{NotShadowCaster, NotShadowReceiver};
@@ -28,13 +33,13 @@ pub struct WreckInfo {
 
 #[derive(Message, Clone, Copy)]
 pub enum FxEvent {
-    /// Kanonenschuss: Mündung und Schussrichtung
-    Muzzle { pos: Vec3, dir: Vec3 },
+    /// Kanonenschuss: Mündung, Schussrichtung und Waffenklasse
+    Muzzle { pos: Vec3, dir: Vec3, caliber: Caliber },
     /// Raketenstart mit Rückstrahl
     Launch { pos: Vec3, dir: Vec3 },
     /// Rauchspur einer Rakete
     Trail(Vec3),
-    Impact { pos: Vec3, rocket: bool },
+    Impact { pos: Vec3, caliber: Caliber, surface: Surface },
     Death { pos: Vec3, big: bool, wreck: Option<WreckInfo> },
     Puff { pos: Vec3, dark: bool },
     /// Staubwolke beim Baubeginn und bei Fertigstellung eines Gebäudes
@@ -56,6 +61,10 @@ enum Look {
     Fire = 3,
     Spark = 4,
     Shock = 5,
+    /// leuchtende Plasmateilchen
+    Plasma = 6,
+    /// Lichtbogen beim Schweißen
+    Arc = 7,
 }
 const LEVELS: usize = 10;
 
@@ -70,6 +79,11 @@ pub struct FxKit {
     debris_rock: Handle<StandardMaterial>,
     debris_metal: Handle<StandardMaterial>,
     wreck: Handle<StandardMaterial>,
+    casing: Handle<Mesh>,
+    brass: Handle<StandardMaterial>,
+    /// Trümmerhaufen in mehreren Varianten (Radius 1)
+    rubble: Vec<Handle<Mesh>>,
+    rubble_mat: Handle<StandardMaterial>,
 }
 
 // ---------------------------------------------------------------- Texturen
@@ -173,6 +187,56 @@ fn scorch_tex() -> Image {
     })
 }
 
+/// Trümmerhaufen mit Radius 1: Betonbrocken zu einem Hügel, Wandreste, verbogene Träger
+fn rubble_mesh(seed: u64) -> Mesh {
+    let mut g = Geo::default();
+    let mut r = Rng(seed);
+    let concrete = [
+        lin(Color::srgb(0.47, 0.45, 0.41)),
+        lin(Color::srgb(0.37, 0.35, 0.32)),
+        lin(Color::srgb(0.26, 0.24, 0.22)),
+        lin(Color::srgb(0.11, 0.10, 0.09)),
+    ];
+    let steel = [lin(Color::srgb(0.30, 0.17, 0.10)), lin(Color::srgb(0.16, 0.16, 0.17))];
+    // flacher, unregelmäßiger Sockel
+    let plan: Vec<Vec2> = (0..9)
+        .map(|i| {
+            let a = TAU * i as f32 / 9.0;
+            Vec2::new(a.cos(), a.sin()) * r.range(0.8, 1.0)
+        })
+        .collect();
+    g.extrude_y(&plan, -0.05, 0.06, 0.95, 0.0, concrete[2]);
+    for _ in 0..52 {
+        let a = r.range(0.0, TAU);
+        let d = r.next_f32().sqrt() * 0.9;
+        let mound = (1.0 - d) * 0.5;
+        let size = Vec3::new(r.range(0.08, 0.3), r.range(0.05, 0.18), r.range(0.08, 0.3));
+        let rot = Quat::from_euler(EulerRot::XYZ, r.range(-0.6, 0.6), r.range(0.0, TAU), r.range(-0.6, 0.6));
+        let col = concrete[(r.next_f32() * 4.0) as usize % 4];
+        g.cuboid(Vec3::new(a.cos() * d, r.range(0.0, mound) + size.y * 0.3, a.sin() * d), size, rot, col);
+    }
+    // stehengebliebene Wandreste
+    for _ in 0..3 {
+        let a = r.range(0.0, TAU);
+        let d = r.range(0.4, 0.8);
+        let size = Vec3::new(r.range(0.45, 0.8), r.range(0.35, 0.7), 0.08);
+        let rot = Quat::from_rotation_y(a + r.range(-0.4, 0.4)) * Quat::from_rotation_x(r.range(-0.35, 0.35));
+        g.cuboid(Vec3::new(a.cos() * d, size.y * 0.4, a.sin() * d), size, rot, concrete[0]);
+    }
+    // verbogene Träger und ein Rohr, schräg aus dem Haufen
+    for i in 0..7 {
+        let a = r.range(0.0, TAU);
+        let d = r.range(0.1, 0.7);
+        let len = r.range(0.5, 0.9);
+        let rot = Quat::from_rotation_y(r.range(0.0, TAU)) * Quat::from_rotation_x(r.range(0.3, 1.0));
+        g.cuboid(Vec3::new(a.cos() * d, 0.2 + len * 0.2, a.sin() * d), Vec3::new(0.045, 0.045, len), rot, steel[i % 2]);
+    }
+    let axis = Vec3::new(r.range(-1.0, 1.0), 0.6, r.range(-1.0, 1.0));
+    g.cyl(Vec3::new(r.range(-0.4, 0.4), 0.3, r.range(-0.4, 0.4)), 0.06, 0.8, axis, 8, steel[1]);
+    g.weather(lin(Color::srgb(0.58, 0.49, 0.37)), 0.25, 0.45);
+    g.build().expect("Trümmer")
+}
+
 impl FxKit {
     pub fn new(meshes: &mut Assets<Mesh>, mats: &mut Assets<StandardMaterial>, images: &mut Assets<Image>) -> Self {
         let smoke = images.add(smoke_tex());
@@ -218,6 +282,8 @@ impl FxKit {
             add(mats, &fire, LinearRgba::rgb(3.6, 1.25, 0.32)),
             add(mats, &spark, LinearRgba::rgb(14.0, 8.0, 3.0)),
             add(mats, &shock, LinearRgba::rgb(3.0, 2.3, 1.6)),
+            add(mats, &spark, LinearRgba::rgb(5.5, 1.4, 8.0)),
+            add(mats, &spark, LinearRgba::rgb(4.0, 6.5, 9.0)),
         ];
         let scorch = std::array::from_fn(|i| {
             mats.add(StandardMaterial {
@@ -246,6 +312,15 @@ impl FxKit {
         chunk.compute_flat_normals();
 
         Self {
+            casing: meshes.add(Cylinder::new(0.045, 0.2).mesh().resolution(6).build()),
+            brass: mats.add(StandardMaterial {
+                base_color: Color::srgb(0.75, 0.55, 0.25),
+                metallic: 0.9,
+                perceptual_roughness: 0.35,
+                ..default()
+            }),
+            rubble: (0..3).map(|i| meshes.add(rubble_mesh(0xA5_1234 + i * 7919))).collect(),
+            rubble_mat: mats.add(StandardMaterial { perceptual_roughness: 0.95, ..default() }),
             quad: meshes.add(Rectangle::new(1.0, 1.0)),
             ground: meshes.add(Plane3d::default().mesh().size(1.0, 1.0)),
             chunk: meshes.add(chunk),
@@ -334,6 +409,39 @@ pub struct Wreck {
     smoke: f32,
     timer: f32,
     big: bool,
+    /// Größe der Brandstelle (1 bei Fahrzeugen, größer bei Trümmerhaufen)
+    size: f32,
+    /// so lange bleibt es liegen, bevor es versinkt
+    stay: f32,
+}
+
+/// Ein zerstörtes Gebäude sinkt unter Explosionen in sich zusammen
+#[derive(Component)]
+pub struct Collapse {
+    age: f32,
+    timer: f32,
+    radius: f32,
+    depth: f32,
+    base: Vec3,
+    rot: Quat,
+    axis: Vec3,
+}
+
+const COLLAPSE_TIME: f32 = 2.8;
+
+impl Collapse {
+    pub fn new(t: &Transform, radius: f32) -> Self {
+        let p = t.translation;
+        Self {
+            age: 0.0,
+            timer: 0.0,
+            radius,
+            depth: radius * 1.5,
+            base: p,
+            rot: t.rotation,
+            axis: Vec3::new((p.x * 1.7).sin(), 0.0, (p.z * 1.3).cos()).normalize_or(Vec3::X),
+        }
+    }
 }
 
 // ---------------------------------------------------------------- Erzeugung
@@ -358,7 +466,7 @@ impl Spawner<'_, '_, '_> {
             angle: self.rng.range(0.0, TAU),
             spin: self.rng.range(-0.8, 0.8),
             peak,
-            fade_in: if matches!(look, Look::Fire | Look::Spark) { 0.02 } else { 0.12 },
+            fade_in: if matches!(look, Look::Fire | Look::Spark | Look::Arc) { 0.02 } else { 0.12 },
             streak: look == Look::Spark,
             level: usize::MAX,
         };
@@ -475,9 +583,13 @@ impl Spawner<'_, '_, '_> {
     }
 
     fn flash(&mut self, pos: Vec3, intensity: f32, life: f32, range: f32) {
+        self.flash_col(pos, intensity, life, range, Color::srgb(1.0, 0.62, 0.32));
+    }
+
+    fn flash_col(&mut self, pos: Vec3, intensity: f32, life: f32, range: f32, color: Color) {
         self.c.spawn((
             PointLight {
-                color: Color::srgb(1.0, 0.62, 0.32),
+                color,
                 intensity,
                 range,
                 shadow_maps_enabled: false,
@@ -486,6 +598,186 @@ impl Spawner<'_, '_, '_> {
             Transform::from_translation(pos),
             Flash { intensity, age: 0.0, life },
         ));
+    }
+
+    /// Ausgeworfene Messinghülse, die vom Boden abprallt
+    fn casing(&mut self, pos: Vec3, dir: Vec3, size: f32) {
+        let side = dir.cross(Vec3::Y).normalize_or(Vec3::X);
+        let v = side * self.rng.range(2.5, 4.0) + Vec3::Y * self.rng.range(2.0, 3.5) - dir * 0.5;
+        let axis = self.rand_dir(-1.0);
+        self.c.spawn((
+            Mesh3d(self.kit.casing.clone()),
+            MeshMaterial3d(self.kit.brass.clone()),
+            Transform::from_translation(pos).with_rotation(Quat::from_rotation_arc(Vec3::Y, side)).with_scale(Vec3::splat(size)),
+            NotShadowCaster,
+            NotShadowReceiver,
+            Debris { vel: v, axis, spin: self.rng.range(14.0, 24.0), age: 0.0, life: self.rng.range(6.0, 9.0), resting: false },
+        ));
+    }
+
+    /// Rauchring quer zur Schussrichtung (Mündungsbremse schwerer Rohre)
+    #[allow(clippy::too_many_arguments)]
+    fn smoke_ring(&mut self, pos: Vec3, dir: Vec3, n: usize, radius: f32, speed: f32, size: f32, life: f32) {
+        let u = dir.cross(Vec3::Y).normalize_or(Vec3::X);
+        let v = dir.cross(u).normalize_or(Vec3::Y);
+        for i in 0..n {
+            let a = TAU * i as f32 / n as f32 + self.rng.range(-0.15, 0.15);
+            let d = u * a.cos() + v * a.sin();
+            let l = life * self.rng.range(0.8, 1.1);
+            self.particle(Look::SmokeLight, pos + d * radius, d * speed + dir * speed * 0.4, l, size * 0.6, size * 1.8, 0.7);
+        }
+    }
+
+    /// Mündungsfeuer je Waffenklasse
+    fn muzzle(&mut self, pos: Vec3, dir: Vec3, caliber: Caliber) {
+        let k = caliber.scale();
+        let lat = dir.cross(Vec3::Y).normalize_or_zero();
+        match caliber {
+            Caliber::Light => {
+                // kurzes, helles Züngeln der Maschinenkanone
+                for (o, size) in [(0.0, 0.45), (0.25, 0.3)] {
+                    let life = self.rng.range(0.05, 0.08);
+                    self.particle(Look::Fire, pos + dir * o, dir * 2.0, life, size, size * 1.2, 1.0);
+                }
+                if self.rng.next_f32() < 0.5 {
+                    self.particle(Look::SmokeLight, pos + dir * 0.3, dir * 1.2 + Vec3::Y * 0.3, 0.8, 0.3, 0.9, 0.5);
+                }
+                self.flash(pos, 120_000.0, 0.05, 6.0);
+                self.casing(pos - dir * 1.1, dir, 0.6);
+            }
+            Caliber::Medium | Caliber::Heavy | Caliber::Rocket => {
+                let heavy = caliber == Caliber::Heavy;
+                let layers: &[(f32, f32)] = if heavy { &[(0.0, 1.3), (0.45, 1.05), (0.95, 0.75), (1.4, 0.45)] } else { &[(0.0, 0.9), (0.35, 0.7), (0.7, 0.45)] };
+                let stretch = if heavy { 1.3 } else { 1.0 };
+                for &(o, size) in layers {
+                    let life = self.rng.range(0.09, 0.14) * stretch;
+                    self.particle(Look::Fire, pos + dir * o, dir * 3.0, life, size, size * 1.2, 1.0);
+                }
+                // Mündungsbremse: seitliche Feuerstrahlen
+                for side in [-1.0f32, 1.0] {
+                    let l = lat * side;
+                    self.particle(Look::Fire, pos + l * 0.15, l * 6.0 * k + dir * 2.0, 0.07 * stretch, 0.4 * k, 0.6 * k, 0.8);
+                    if heavy {
+                        self.particle(Look::SmokeLight, pos + l * 0.4, l * 3.0 + Vec3::Y * 0.4, 1.6, 0.4, 1.6, 0.6);
+                    }
+                }
+                self.smoke(Look::SmokeLight, pos + dir * 0.5, if heavy { 7 } else { 4 }, 0.9 * k, 1.6 * stretch, 0.4, 0.25 * k, 0.8);
+                self.flash(pos + dir * 0.5, 350_000.0 * k * k, 0.08 * stretch, 10.0 * k);
+                if pos.y - terrain::height(pos.x, pos.z) < 1.6 {
+                    self.dust_ring(pos, (5.0 * k) as usize, k, 1.6 * k);
+                }
+                self.casing(pos - dir * if heavy { 2.6 } else { 1.9 }, dir, k);
+            }
+            Caliber::Artillery => {
+                // langer Feuerstrahl, Rauchring und Druckwelle am Boden
+                for (o, size) in [(0.0, 1.6), (0.6, 1.4), (1.3, 1.1), (2.0, 0.8), (2.6, 0.5)] {
+                    let life = self.rng.range(0.12, 0.18);
+                    self.particle(Look::Fire, pos + dir * o, dir * 5.0, life, size, size * 1.3, 1.0);
+                }
+                for side in [-1.0f32, 1.0] {
+                    let l = lat * side;
+                    self.particle(Look::Fire, pos + l * 0.2, l * 10.0 + dir * 3.0, 0.12, 0.9, 1.4, 0.9);
+                }
+                self.smoke_ring(pos + dir * 0.6, dir, 12, 0.5, 2.6, 1.0, 2.4);
+                self.smoke(Look::SmokeLight, pos + dir * 1.2, 8, 1.6, 3.2, 0.5, 0.8, 0.75);
+                let ground = pos - dir * 2.2;
+                self.dust_ring(ground, 14, 3.0, 3.5);
+                self.shockwave(ground, 7.0);
+                self.flash(pos, 2_500_000.0, 0.16, 22.0);
+            }
+        }
+    }
+
+    /// Einschlag je Waffenklasse und getroffener Oberfläche
+    fn impact(&mut self, pos: Vec3, caliber: Caliber, surface: Surface) {
+        let k = caliber.scale();
+        let g = terrain::on_ground(pos);
+        match surface {
+            Surface::Armor => {
+                // Stahl: Funkenregen und Querschläger
+                self.sparks(pos, (6.0 + 10.0 * k) as usize, 9.0 + 3.0 * k);
+                for _ in 0..(2.0 + 2.0 * k) as usize {
+                    let v = self.rand_dir(0.45) * self.rng.range(14.0, 22.0);
+                    let life = self.rng.range(0.25, 0.45);
+                    self.particle(Look::Spark, pos, v, life, 0.1, 0.05, 1.0);
+                }
+                self.fire_burst(pos, (2.0 + 2.0 * k) as usize, 0.7 * k, 0.2, 1.0);
+                if k >= 1.0 {
+                    self.debris(pos, (k * 2.0) as usize, 6.0, true, 0.12 * k);
+                }
+                self.smoke(Look::SmokeDark, pos, 1 + k as usize, 0.8 * k, 1.8, 0.8, 0.2 * k, 0.6);
+                self.flash(pos + Vec3::Y * 0.5, 400_000.0 * k, 0.12, 8.0 + 4.0 * k);
+            }
+            Surface::Concrete => {
+                // Beton: Splitter und grauer Staub
+                self.sparks(pos, (3.0 + 5.0 * k) as usize, 8.0);
+                for _ in 0..(3.0 + 3.0 * k) as usize {
+                    let v = self.rand_dir(-0.2) * self.rng.range(1.5, 4.0) * k.sqrt();
+                    let life = self.rng.range(1.4, 2.2);
+                    self.particle(Look::SmokeLight, pos, v, life, 0.5 * k, 1.6 * k, 0.55);
+                }
+                for _ in 0..3 {
+                    let v = self.rand_dir(0.3) * self.rng.range(3.0, 6.0);
+                    self.particle(Look::Dust, pos, v, 0.8, 0.2 * k, 0.5 * k, 0.8).insert(Heavy);
+                }
+                self.debris(pos, (1.0 + 2.0 * k) as usize, 6.0, false, 0.14 * k);
+                self.fire_burst(pos, (1.0 + 2.0 * k) as usize, 0.6 * k, 0.2, 1.0);
+                self.flash(pos + Vec3::Y * 0.5, 350_000.0 * k, 0.12, 8.0 + 4.0 * k);
+            }
+            Surface::Ground => {
+                self.fire_burst(g + Vec3::Y * 0.3 * k, (2.0 + 3.0 * k) as usize, 0.9 * k, 0.3, 1.5);
+                self.sparks(g, (3.0 + 4.0 * k) as usize, 8.0);
+                // Erdfontäne
+                for _ in 0..(3.0 + 4.0 * k) as usize {
+                    let v = self.rand_dir(0.7) * self.rng.range(2.5, 6.0) * k.sqrt();
+                    let life = self.rng.range(0.9, 1.6);
+                    self.particle(Look::Dust, g, v, life, 0.3 * k, 1.1 * k, 0.85).insert(Heavy);
+                }
+                self.debris(g + Vec3::Y * 0.2, (1.0 + 2.5 * k) as usize, 6.0 + k, false, 0.18 * k.sqrt());
+                self.scorch(g, k, 30.0 + 10.0 * k);
+                self.smoke(Look::SmokeDark, g, 1 + (1.5 * k) as usize, k, 2.2, 0.8, 0.3 * k, 0.6);
+                if k > 2.0 {
+                    // Granate oder Rakete: Druckwelle und Staubring
+                    self.shockwave(g, 3.0 * k);
+                    self.dust_ring(g, 10, 1.2 * k, 1.4 * k);
+                }
+                if caliber == Caliber::Artillery {
+                    // hohe Erdsäule, die zurückfällt
+                    for _ in 0..7 {
+                        let v = Vec3::new(self.rng.range(-1.2, 1.2), self.rng.range(7.0, 11.0), self.rng.range(-1.2, 1.2));
+                        let life = self.rng.range(1.4, 1.9);
+                        self.particle(Look::Dust, g, v, life, 0.6, 2.2, 0.85).insert(Heavy);
+                    }
+                }
+                self.flash(g + Vec3::Y, 500_000.0 * k * k, 0.18, 10.0 + 4.0 * k);
+            }
+        }
+        if caliber == Caliber::Rocket {
+            self.fire_burst(pos, 4, 1.6, 0.35, 1.2);
+        }
+    }
+
+    /// Lichtbogen und herabfallende Funken auf der Baustelle
+    fn weld(&mut self, pos: Vec3) {
+        for _ in 0..9 {
+            let v = self.rand_dir(-0.2) * self.rng.range(2.0, 5.0);
+            let life = self.rng.range(0.4, 0.9);
+            self.particle(Look::Spark, pos, v, life, 0.09, 0.04, 1.0);
+        }
+        self.particle(Look::Arc, pos, Vec3::ZERO, 0.09, 0.7, 0.4, 1.0);
+        self.flash_col(pos, 250_000.0, 0.07, 7.0, Color::srgb(0.6, 0.8, 1.0));
+    }
+
+    /// Dampf (hell) oder Abgas (dunkel) aus einem Schornstein
+    fn vent(&mut self, pos: Vec3, steam: bool) {
+        let v = Vec3::new(self.rng.range(-0.15, 0.15) + 0.3, self.rng.range(1.4, 2.0), self.rng.range(-0.15, 0.15) + 0.15);
+        if steam {
+            let life = self.rng.range(3.0, 4.5);
+            self.particle(Look::SmokeLight, pos, v, life, 0.45, 3.4, 0.8);
+        } else {
+            let life = self.rng.range(4.0, 5.5);
+            self.particle(Look::SmokeDark, pos, v, life, 0.5, 3.8, 0.8);
+        }
     }
 }
 
@@ -499,22 +791,7 @@ pub fn spawn_effects(
     let mut s = Spawner { c: &mut commands, kit: &kit, rng: &mut rng };
     for ev in events.read() {
         match *ev {
-            FxEvent::Muzzle { pos, dir } => {
-                // Mündungsfeuer als kurzer Kegel aus Feuerflächen
-                for (k, size) in [(0.0, 0.9), (0.35, 0.7), (0.7, 0.45)] {
-                    let life = s.rng.range(0.09, 0.14);
-                    s.particle(Look::Fire, pos + dir * k, dir * 3.0, life, size, size * 1.2, 1.0);
-                }
-                for side in [-1.0f32, 1.0] {
-                    let lat = dir.cross(Vec3::Y).normalize_or_zero() * side;
-                    s.particle(Look::Fire, pos + lat * 0.15, lat * 6.0 + dir * 2.0, 0.07, 0.4, 0.6, 0.8);
-                }
-                s.smoke(Look::SmokeLight, pos + dir * 0.5, 4, 0.9, 1.6, 0.4, 0.25, 0.8);
-                s.flash(pos + dir * 0.5, 350_000.0, 0.08, 10.0);
-                if pos.y - terrain::height(pos.x, pos.z) < 1.6 {
-                    s.dust_ring(pos, 5, 1.0, 1.6);
-                }
-            }
+            FxEvent::Muzzle { pos, dir, caliber } => s.muzzle(pos, dir, caliber),
             FxEvent::Launch { pos, dir } => {
                 s.fire_burst(pos, 3, 0.6, 0.15, 0.5);
                 for _ in 0..7 {
@@ -530,24 +807,7 @@ pub fn spawn_effects(
                 let life = s.rng.range(1.0, 1.6);
                 s.particle(Look::SmokeLight, pos, Vec3::Y * 0.3, life, 0.25, 1.1, 0.55);
             }
-            FxEvent::Impact { pos, rocket } => {
-                let size = if rocket { 2.2 } else { 1.1 };
-                s.fire_burst(pos, if rocket { 7 } else { 3 }, size, 0.3, 1.5);
-                s.sparks(pos, if rocket { 14 } else { 7 }, if rocket { 11.0 } else { 8.0 });
-                let ground = pos.y - terrain::height(pos.x, pos.z) < 1.0;
-                if ground {
-                    // Erdfontäne und Brocken
-                    for _ in 0..if rocket { 8 } else { 4 } {
-                        let v = s.rand_dir(0.6) * s.rng.range(2.0, 6.0);
-                        let life = s.rng.range(0.8, 1.5);
-                        s.particle(Look::Dust, pos, v, life, size * 0.3, size * 1.1, 0.85).insert(Heavy);
-                    }
-                    s.debris(pos + Vec3::Y * 0.2, if rocket { 6 } else { 2 }, 7.0, false, 0.2);
-                    s.scorch(pos, if rocket { 2.4 } else { 1.0 }, 30.0);
-                }
-                s.smoke(Look::SmokeDark, pos, if rocket { 4 } else { 2 }, size, 2.2, 0.8, 0.3, 0.6);
-                s.flash(pos + Vec3::Y, if rocket { 1_600_000.0 } else { 500_000.0 }, 0.18, 16.0);
-            }
+            FxEvent::Impact { pos, caliber, surface } => s.impact(pos, caliber, surface),
             FxEvent::Death { pos, big, wreck } => {
                 let size = if big { 7.0 } else { 2.8 };
                 let core = pos + Vec3::Y * size * 0.25;
@@ -596,7 +856,15 @@ fn spawn_wreck(c: &mut Commands, kit: &FxKit, models: &ModelKit, rng: &mut Rng, 
         .spawn((
             Transform::from_translation(ground - Vec3::Y * 0.08).with_rotation(w.rot * tilt),
             Visibility::default(),
-            Wreck { age: 0.0, fire: rng.range(8.0, 14.0), smoke: rng.range(22.0, 30.0), timer: 0.0, big: w.kind != UnitKind::Sammler },
+            Wreck {
+                age: 0.0,
+                fire: rng.range(8.0, 14.0),
+                smoke: rng.range(22.0, 30.0),
+                timer: 0.0,
+                big: w.kind != UnitKind::Sammler,
+                size: 1.0,
+                stay: 55.0,
+            },
         ))
         .id();
     c.entity(root).with_child((Mesh3d(vm.hull.clone()), MeshMaterial3d(kit.wreck.clone())));
@@ -648,7 +916,7 @@ pub fn update_fx(
         p.vel *= drag;
         t.translation += p.vel * dt;
         // Rauch steigt weiter, Feuer wird langsamer
-        if matches!(p.look, Look::SmokeDark | Look::SmokeLight) {
+        if matches!(p.look, Look::SmokeDark | Look::SmokeLight | Look::Plasma) {
             t.translation.y += 0.35 * dt;
         }
         p.angle += p.spin * dt;
@@ -749,9 +1017,9 @@ pub fn update_wrecks(
     for (e, mut w, mut t) in &mut q {
         w.age += dt;
         w.timer -= dt;
-        if w.age > 55.0 {
-            t.translation.y -= 0.3 * dt;
-            if w.age > 62.0 {
+        if w.age > w.stay {
+            t.translation.y -= 0.3 * w.size * dt;
+            if w.age > w.stay + 7.0 {
                 s.c.entity(e).try_despawn();
             }
             continue;
@@ -759,19 +1027,21 @@ pub fn update_wrecks(
         if w.timer > 0.0 || w.age > w.smoke {
             continue;
         }
-        w.timer = 0.07;
-        let top = t.translation + Vec3::Y * if w.big { 1.0 } else { 1.2 };
-        let jitter = Vec3::new(s.rng.range(-0.5, 0.5), 0.0, s.rng.range(-0.5, 0.5));
+        // Trümmerhaufen brennen an mehreren Stellen, daher öfter
+        w.timer = if w.size > 1.0 { 0.04 } else { 0.07 };
+        let top = t.translation + Vec3::Y * if w.size > 1.0 { w.size * 0.55 } else if w.big { 1.0 } else { 1.2 };
+        let jitter = Vec3::new(s.rng.range(-0.5, 0.5), 0.0, s.rng.range(-0.5, 0.5)) * w.size;
+        let grow = w.size.sqrt();
         if w.age < w.fire {
             let strength = 1.0 - w.age / w.fire;
             let life = s.rng.range(0.3, 0.55);
             let side = Vec3::new(s.rng.range(-0.4, 0.4), 0.0, s.rng.range(-0.4, 0.4));
-            s.particle(Look::Fire, top + jitter * 1.3, Vec3::Y * 2.6 + side, life, 0.7 * (0.5 + strength), 0.25, 1.0);
+            s.particle(Look::Fire, top + jitter * 1.3, Vec3::Y * 2.6 + side, life, 0.7 * (0.5 + strength) * grow, 0.25, 1.0);
         }
         let fade = 1.0 - w.age / w.smoke;
         if s.rng.next_f32() < 0.45 {
             let life = s.rng.range(3.0, 4.5);
-            s.particle(Look::SmokeDark, top + jitter + Vec3::Y * 0.6, Vec3::new(0.3, 1.2, 0.15), life, 0.7, 2.8, 0.9 * fade);
+            s.particle(Look::SmokeDark, top + jitter + Vec3::Y * 0.6, Vec3::new(0.3, 1.2, 0.15), life, 0.7 * grow, 2.8 * grow, 0.9 * fade);
         }
     }
 }
@@ -800,5 +1070,117 @@ pub fn damage_smoke(
                 w.write(FxEvent::Flame(t.translation + off * 0.8));
             }
         }
+    }
+}
+
+/// Einsturz: das Gebäude sackt ab und kippt, Explosionen reißen es auf,
+/// am Ende bleibt ein brennender Trümmerhaufen in einer Staubwolke
+pub fn update_collapse(
+    mut commands: Commands,
+    time: Res<Time>,
+    kit: Res<FxKit>,
+    mut rng: ResMut<Rng>,
+    mut q: Query<(Entity, &mut Collapse, &mut Transform)>,
+) {
+    let dt = time.delta_secs().min(0.05);
+    let mut s = Spawner { c: &mut commands, kit: &kit, rng: &mut rng };
+    for (e, mut c, mut t) in &mut q {
+        c.age += dt;
+        c.timer -= dt;
+        let k = (c.age / COLLAPSE_TIME).min(1.0);
+        let sink = k * k;
+        let shake = (c.age * 43.0).sin() * 0.06 * (1.0 - k);
+        t.translation = c.base - Vec3::Y * c.depth * sink + Vec3::new(shake, 0.0, shake * 0.7);
+        t.rotation = Quat::from_axis_angle(c.axis, 0.16 * sink) * c.rot;
+        if c.timer <= 0.0 && k < 0.9 {
+            c.timer = s.rng.range(0.15, 0.3);
+            let a = s.rng.range(0.0, TAU);
+            let r = s.rng.range(0.0, c.radius * 0.8);
+            let h = s.rng.range(0.5, 0.5 + c.depth * (1.0 - sink) * 0.8);
+            let p = c.base + Vec3::new(a.cos() * r, h, a.sin() * r);
+            let metal = s.rng.next_f32() < 0.5;
+            s.fire_burst(p, 4, 1.6, 0.4, 1.5);
+            s.sparks(p, 8, 10.0);
+            s.debris(p, 3, 9.0, metal, 0.35);
+            s.smoke(Look::SmokeDark, p, 2, 2.0, 3.5, 1.2, 0.8, 0.8);
+            s.flash(p, 1_200_000.0, 0.2, 18.0);
+        }
+        // Staub quillt am Fuß heraus
+        if s.rng.next_f32() < 0.6 {
+            let a = s.rng.range(0.0, TAU);
+            let d = Vec3::new(a.cos(), 0.0, a.sin());
+            let g = terrain::on_ground(c.base + d * c.radius);
+            let life = s.rng.range(1.8, 2.6);
+            s.particle(Look::Dust, g + Vec3::Y * 0.4, d * 2.5 + Vec3::Y * 0.6, life, 1.0, 3.2, 0.75);
+        }
+        if c.age >= COLLAPSE_TIME {
+            s.c.entity(e).try_despawn();
+            s.dust_ring(c.base, 18, c.radius * 1.2, c.radius);
+            s.smoke(Look::Dust, c.base + Vec3::Y, 10, c.radius * 0.9, 4.0, 0.6, c.radius * 0.6, 0.7);
+            let mesh = s.kit.rubble[(s.rng.next_f32() * 3.0) as usize % 3].clone();
+            let ground = terrain::on_ground(c.base);
+            let rot = Quat::from_rotation_y(s.rng.range(0.0, TAU));
+            let (fire, smoke) = (s.rng.range(18.0, 26.0), s.rng.range(45.0, 60.0));
+            s.c.spawn((
+                Mesh3d(mesh),
+                MeshMaterial3d(s.kit.rubble_mat.clone()),
+                Transform::from_translation(ground - Vec3::Y * 0.05).with_rotation(rot).with_scale(Vec3::new(c.radius, c.radius * 0.8, c.radius)),
+                Wreck { age: 0.0, fire, smoke, timer: 0.0, big: true, size: c.radius * 0.5, stay: 110.0 },
+            ));
+            s.scorch(ground, c.radius * 2.6, 120.0);
+        }
+    }
+}
+
+/// Umgebungseffekte: Schornsteine, Schweißarbeiten auf Baustellen, Plasmaquellen
+pub fn ambient_fx(
+    mut commands: Commands,
+    time: Res<Time>,
+    kit: Res<FxKit>,
+    models: Res<ModelKit>,
+    mut rng: ResMut<Rng>,
+    mut timer: Local<f32>,
+    structures: Query<(&Transform, &Structure, &Team, Option<&Construction>)>,
+    nodes: Query<(&Transform, &ResourceNode)>,
+) {
+    *timer -= time.delta_secs();
+    if *timer > 0.0 {
+        return;
+    }
+    *timer = 0.1;
+    let mut s = Spawner { c: &mut commands, kit: &kit, rng: &mut rng };
+    for (t, st, team, cons) in &structures {
+        let sm = &models.structures[st.0.idx()][team.0 as usize];
+        match cons {
+            Some(c) => {
+                // Schweißen an der schon sichtbaren Höhe des wachsenden Gebäudes
+                let top = sm.height * (1.0 - (1.0 - c.progress) * (1.0 - c.progress));
+                if top < 0.6 || s.rng.next_f32() > 0.8 {
+                    continue;
+                }
+                // am Rand, damit die Wände den Lichtbogen nicht verdecken
+                let a = s.rng.range(0.0, TAU);
+                let r = st.0.radius() * s.rng.range(0.75, 0.95);
+                let h = s.rng.range(0.4, top);
+                s.weld(t.translation + Vec3::new(a.cos() * r, h, a.sin() * r));
+            }
+            None => {
+                for &(v, steam) in &sm.vents {
+                    if s.rng.next_f32() < 0.7 {
+                        s.vent(t.transform_point(v), steam);
+                    }
+                }
+            }
+        }
+    }
+    for (t, n) in &nodes {
+        if n.kind != ResKind::Plasma || n.amount == 0 || s.rng.next_f32() > 0.6 {
+            continue;
+        }
+        let p = t.translation + Vec3::new(s.rng.range(-2.2, 2.2), s.rng.range(0.2, 0.8), s.rng.range(-2.2, 2.2));
+        let v = Vec3::new(s.rng.range(-0.1, 0.1), s.rng.range(0.5, 1.0), s.rng.range(-0.1, 0.1));
+        let life = s.rng.range(1.6, 2.6);
+        let size = s.rng.range(0.35, 0.55);
+        s.particle(Look::Plasma, p, v, life, size, 0.1, 1.0);
     }
 }
