@@ -831,3 +831,35 @@ fn attack_move_breaches_closed_wall() {
     let target = app.world().get::<AttackTarget>(tank).map(|a| a.0);
     assert!(target.is_some_and(|t| ring.contains(&t)), "kein Mauerstück als Ziel: {target:?}");
 }
+
+/// Ein fertiger Raketenturm sucht sich selbst ein Ziel auf 22 m (außer Reichweite eines Geschützturms) und trifft
+#[test]
+fn rocket_tower_hits_at_long_range() {
+    use crate::units::{auto_target, combat, projectiles};
+    let mut app = app();
+    app.add_systems(Update, (snapshot, auto_target, combat, projectiles).chain());
+    let pos = Vec3::new(0.0, 0.0, 0.0);
+    app.world_mut().resource_scope(|world, kit: Mut<ModelKit>| {
+        let mut c = world.commands();
+        let e = crate::construction::spawn_structure(&mut c, &kit, PLAYER, BuildingKind::Raketenturm, pos, None);
+        let hp = BuildingKind::Raketenturm.hp();
+        c.entity(e).remove::<Construction>().insert(Health { hp, max: hp });
+    });
+    app.world_mut().flush();
+    let target = app
+        .world_mut()
+        .spawn((
+            Transform::from_translation(terrain::on_ground(pos + Vec3::new(22.0, 0.0, 0.0))),
+            ENEMY,
+            Health { hp: 220.0, max: 220.0 },
+            Unit { kind: UnitKind::Panzer, speed: 6.0, radius: 1.4 },
+            Heading(0.0),
+        ))
+        .id();
+    assert!(22.0 - 1.4 > 17.0, "Ziel muss außerhalb der Geschützturm-Reichweite liegen");
+    for _ in 0..80 {
+        app.update();
+    }
+    let hp = app.world().get::<Health>(target).expect("Ziel").hp;
+    assert!(hp < 220.0 - 50.0, "Raketenturm hat kaum getroffen: {hp}");
+}

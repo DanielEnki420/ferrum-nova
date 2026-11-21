@@ -273,6 +273,8 @@ pub enum BuildingKind {
     Mauer,
     /// Tor in der Mauer: lässt nur eigene Einheiten durch
     Tor,
+    /// Raketenturm: große Reichweite, Flächenschaden
+    Raketenturm,
 }
 
 impl BuildingKind {
@@ -285,12 +287,14 @@ impl BuildingKind {
             BuildingKind::Raffinerie => "Raffinerie",
             BuildingKind::Fabrik => "Fabrik",
             BuildingKind::Mauer => "Mauer",
+            BuildingKind::Raketenturm => "Raketenturm",
             BuildingKind::Tor => "Tor",
         }
     }
     pub fn short_name(self) -> &'static str {
         match self {
             BuildingKind::Geschuetzturm => "Geschuetz",
+            BuildingKind::Raketenturm => "Raketen",
             k => k.name(),
         }
     }
@@ -301,6 +305,7 @@ impl BuildingKind {
             BuildingKind::Raffinerie => [150, 0],
             BuildingKind::Fabrik => [200, 80],
             BuildingKind::Mauer => [10, 0],
+            BuildingKind::Raketenturm => [160, 60],
             BuildingKind::Tor => [40, 0],
         }
     }
@@ -310,6 +315,7 @@ impl BuildingKind {
             BuildingKind::Raffinerie => 15.0,
             BuildingKind::Fabrik => 20.0,
             BuildingKind::Mauer => 3.0,
+            BuildingKind::Raketenturm => 14.0,
             BuildingKind::Tor => 6.0,
         }
     }
@@ -319,6 +325,7 @@ impl BuildingKind {
             BuildingKind::Raffinerie => 900.0,
             BuildingKind::Fabrik => 1100.0,
             BuildingKind::Mauer => 450.0,
+            BuildingKind::Raketenturm => 600.0,
             BuildingKind::Tor => 650.0,
         }
     }
@@ -329,6 +336,7 @@ impl BuildingKind {
             BuildingKind::Raffinerie => 3.3,
             BuildingKind::Fabrik => 3.9,
             BuildingKind::Mauer => 1.2,
+            BuildingKind::Raketenturm => 1.9,
             BuildingKind::Tor => 2.6,
         }
     }

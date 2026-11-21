@@ -96,10 +96,10 @@ pub fn combat(
     snap: Res<Snapshot>,
     kit: Res<ModelKit>,
     mut fx: MessageWriter<FxEvent>,
-    mut q: Query<(Entity, &mut Weapon, &AttackTarget, &Team, &Transform, Option<&Unit>, Option<&mut Motion>), Without<Construction>>,
+    mut q: Query<(Entity, &mut Weapon, &AttackTarget, &Team, &Transform, Option<&Unit>, Option<&mut Motion>, Option<&Structure>), Without<Construction>>,
 ) {
     let dt = time.delta_secs();
-    for (e, mut w, target, team, t, unit, motion) in &mut q {
+    for (e, mut w, target, team, t, unit, motion, structure) in &mut q {
         w.timer = (w.timer - dt).max(0.0);
         let Some(tgt) = snap.0.get(&target.0) else {
             commands.entity(e).remove::<AttackTarget>();
@@ -117,7 +117,12 @@ pub fn combat(
         }
         w.timer = w.cooldown;
         let dir = to.normalize_or_zero();
-        let (muzzle_len, muzzle_h) = unit.map_or((3.2, 2.1), |u| u.kind.muzzle());
+        let (muzzle_len, muzzle_h) = match (unit, structure) {
+            (Some(u), _) => u.kind.muzzle(),
+            // Raketenturm: aus den Behältern seitlich am Kopf
+            (None, Some(s)) if s.0 == BuildingKind::Raketenturm => (1.0, 2.6),
+            _ => (3.2, 2.1),
+        };
         if let Some(mut m) = motion {
             m.recoil = 1.0;
         }

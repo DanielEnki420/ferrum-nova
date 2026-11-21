@@ -333,7 +333,7 @@ pub fn enemy_ai(
     for s in ai.intel.values() {
         match s.what {
             Seen::Unit(k) => seen[k.idx()] += 1,
-            Seen::Structure(BuildingKind::Geschuetzturm) => turrets_seen += 1,
+            Seen::Structure(BuildingKind::Geschuetzturm | BuildingKind::Raketenturm) => turrets_seen += 1,
             _ => {}
         }
     }
@@ -353,6 +353,8 @@ pub fn enemy_ai(
     let wants_heavy = turrets_seen >= 2 || seen[UnitKind::Panzer.idx()] + 2 * seen[UnitKind::Bollwerk.idx()] >= 4;
     let recent_threat = now - ai.last_threat < 60.0;
     let turrets_wanted = if now < 80.0 { 0 } else { (1 + ((now - 80.0) / 70.0) as usize + recent_threat as usize).min(5) };
+    // Raketentürme erst, wenn die Wirtschaft läuft: einer ab Minute 4,5, dann alle 2,5 Minuten einer mehr
+    let rockets_wanted = if now < 270.0 { 0 } else { (1 + ((now - 270.0) / 150.0) as usize).min(3) };
     let site_list: Vec<Site> = objs
         .iter()
         .filter_map(|o| o.building.map(|b| Site { pos: o.pos, radius: b.0, team: o.team, wall: b.1.is_some_and(|k| k.is_wall()), gate: b.1 == Some(BuildingKind::Tor) }))
@@ -387,6 +389,12 @@ pub fn enemy_ai(
         Some((BuildingKind::Geschuetzturm, ENEMY_HQ_POS + front * 13.0 + side * sign * (4.0 + n * 3.0)))
     } else if count(BuildingKind::Fabrik) == 0 && (now > 200.0 || (now > 120.0 && wants_heavy)) {
         Some((BuildingKind::Fabrik, ENEMY_HQ_POS - to_player() * 2.0 + Vec3::new(to_player().z, 0.0, -to_player().x) * 11.0))
+    } else if count(BuildingKind::Raketenturm) < rockets_wanted {
+        // hinter den Geschütztürmen, abwechselnd links und rechts
+        let side = Vec3::new(-front.z, 0.0, front.x);
+        let n = count(BuildingKind::Raketenturm) as f32;
+        let sign = if (n as usize).is_multiple_of(2) { -1.0 } else { 1.0 };
+        Some((BuildingKind::Raketenturm, ENEMY_HQ_POS + front * 7.0 + side * sign * (7.0 + n * 2.0)))
     } else if refineries < 2 && now > 240.0 && !recent_threat {
         expansion.map(|field| {
             let target = field + flat(ENEMY_HQ_POS - field).normalize_or_zero() * 8.0;
@@ -527,7 +535,8 @@ pub fn enemy_ai(
         .filter(|o| matches!(role_of(o.e), Some(AiRole::Reserve | AiRole::Defend)))
         .map(|o| o.unit.map_or(0.0, value) * o.hp)
         .sum::<f32>()
-        + count(BuildingKind::Geschuetzturm) as f32 * 150.0;
+        + count(BuildingKind::Geschuetzturm) as f32 * 150.0
+        + count(BuildingKind::Raketenturm) as f32 * 130.0;
     if let Some((tp, tv)) = ai.threat {
         // Übermacht an der Basis: die Welle kehrt um
         let recall = tv > home_value * 0.8;
@@ -651,7 +660,7 @@ pub fn pick_target(intel: &HashMap<Entity, Sighting>, artillery: bool) -> Vec3 {
         .values()
         .filter_map(|s| {
             let bonus = match s.what {
-                Seen::Structure(BuildingKind::Geschuetzturm) if artillery => -15.0,
+                Seen::Structure(BuildingKind::Geschuetzturm | BuildingKind::Raketenturm) if artillery => -15.0,
                 Seen::Structure(BuildingKind::Raffinerie) => -10.0,
                 Seen::Structure(_) | Seen::Hq => 0.0,
                 Seen::Unit(_) => return None,
@@ -735,9 +744,9 @@ pub fn ai_tactics(
             let mut score = d / w.range + (oh.hp / oh.max) * 0.8;
             let target_kind = ou.map(|u| u.kind);
             score += match (unit.kind, target_kind, os.map(|s| s.0)) {
-                (UnitKind::Haubitze, None, Some(BuildingKind::Geschuetzturm)) => -0.9,
+                (UnitKind::Haubitze, None, Some(BuildingKind::Geschuetzturm | BuildingKind::Raketenturm)) => -0.9,
                 (UnitKind::Haubitze, None, _) => -0.3,
-                (_, None, Some(BuildingKind::Geschuetzturm)) => 0.2,
+                (_, None, Some(BuildingKind::Geschuetzturm | BuildingKind::Raketenturm)) => 0.2,
                 (_, None, _) => 0.7,
                 (UnitKind::Werfer, Some(UnitKind::Panzer | UnitKind::Bollwerk | UnitKind::Haubitze), _) => -0.3,
                 (UnitKind::Spaeher, Some(UnitKind::Werfer | UnitKind::Haubitze | UnitKind::Sammler), _) => -0.4,

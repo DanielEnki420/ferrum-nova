@@ -147,6 +147,9 @@ pub fn spawn_structure(c: &mut Commands, kit: &ModelKit, team: Team, kind: Build
             c.entity(root).insert(Depot);
         }
         BuildingKind::Fabrik => {}
+        BuildingKind::Raketenturm => {
+            c.entity(root).insert(Weapon { range: 24.0, damage: 30.0, cooldown: 2.2, timer: 0.0, projectile_speed: 22.0, rocket: true, splash: 2.5, arc: 0.0 });
+        }
         BuildingKind::Mauer => {
             c.entity(root).insert(Wall);
         }
@@ -207,6 +210,7 @@ pub fn placement_input(
         (KeyCode::KeyJ, BuildingKind::Fabrik),
         (KeyCode::KeyK, BuildingKind::Mauer),
         (KeyCode::KeyI, BuildingKind::Tor),
+        (KeyCode::KeyU, BuildingKind::Raketenturm),
     ] {
         if keys.just_pressed(key) {
             placing.kind = if placing.kind == Some(kind) { None } else { Some(kind) };

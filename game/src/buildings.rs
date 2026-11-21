@@ -822,3 +822,95 @@ pub fn build_gate(team: Team, meshes: &mut Assets<Mesh>) -> StructMeshes {
         vents: Vec::new(),
     }
 }
+
+// ================================================================ Raketenturm
+
+/// Raketenturm: Betonsockel, Drehkranz, Kopf mit zwei schräg gestellten Startbehältern zu je vier Rohren
+pub fn build_rocket_tower(team: Team, meshes: &mut Assets<Mesh>) -> StructMeshes {
+    let p = palette(team);
+    let concrete = lin(Color::srgb(0.50, 0.49, 0.46));
+    let olive = lin(Color::srgb(0.30, 0.33, 0.22));
+    let warhead = lin(Color::srgb(0.62, 0.16, 0.10));
+    let mut g = Geo::default();
+    let mut glow = Geo::default();
+    let top = 0.4;
+
+    foundation(&mut g, 3.8, 1.0, top);
+    // niedrige Brüstung aus Sandsack-Blöcken, vorne offen
+    let ring = chamfered(3.4, 3.4, 0.9);
+    for i in 0..8 {
+        if i == 0 {
+            continue;
+        }
+        let (a, b) = (ring[i] * 0.97, ring[(i + 1) % 8] * 0.97);
+        let d = b - a;
+        let mid = (a + b) / 2.0;
+        g.cuboid(Vec3::new(mid.x, top + 0.22, mid.y), Vec3::new(d.length() + 0.05, 0.44, 0.34), yaw_to(d), concrete);
+    }
+    // Sockel mit Wartungsklappe, Drehkranz
+    g.frustum(Vec3::Y * (top + 0.6), 0.95, 0.75, 1.2, Vec3::Y, 8, p.paint_dark);
+    g.cuboid(Vec3::new(0.0, top + 0.55, 0.86), Vec3::new(0.45, 0.6, 0.05), Quat::from_rotation_x(-0.17), p.metal);
+    g.cyl(Vec3::Y * (top + 1.25), 0.82, 0.1, Vec3::Y, 24, p.steel_dark);
+    for i in 0..12 {
+        let a = TAU * i as f32 / 12.0;
+        g.cuboid(Vec3::new(a.cos() * 0.72, top + 1.21, a.sin() * 0.72), Vec3::splat(0.05), Quat::IDENTITY, p.metal);
+    }
+    // Reserveraketen in Kisten hinten
+    for (x, z, r) in [(-0.95, 1.05, 0.15), (-0.55, 1.3, -0.25)] {
+        g.cuboid(Vec3::new(x, top + 0.18, z), Vec3::new(0.9, 0.34, 0.32), Quat::from_rotation_y(r), olive);
+    }
+    lamp_post(&mut g, &mut glow, Vec3::new(1.35, top, 1.35), 1.4, Vec3::new(-1.0, 0.0, -1.0), p.steel_dark);
+    g.weather(p.dust, 1.0, 0.45);
+
+    // --- Kopf: Drehteller, Gabel, zwei Startbehälter (Mündungen nach -Z, 0,3 rad angehoben)
+    let mut h = Geo::default();
+    let mut hg = Geo::default();
+    h.cyl(Vec3::Y * 0.08, 0.7, 0.16, Vec3::Y, 16, p.paint_dark);
+    h.cuboid(Vec3::new(0.0, 0.4, 0.15), Vec3::new(0.62, 0.5, 0.9), Quat::IDENTITY, p.paint);
+    let tilt = Quat::from_rotation_x(0.3);
+    for s in [-1.0f32, 1.0] {
+        let c = Vec3::new(s * 0.72, 0.78, -0.05);
+        let at = |v: Vec3| c + tilt * v;
+        // Gabelarm und Achse
+        h.cuboid(Vec3::new(s * 0.36, 0.55, -0.05), Vec3::new(0.12, 0.7, 0.4), Quat::IDENTITY, p.paint_dark);
+        h.cyl(Vec3::new(s * 0.4, 0.78, -0.05), 0.08, 0.2, Vec3::X, 8, p.metal);
+        // Behälter mit Kennstreifen und Verstärkungsrippen
+        h.mesh(Cuboid::new(0.66, 0.66, 1.7).mesh().build(), Transform::from_translation(c).with_rotation(tilt), p.paint);
+        h.mesh(Cuboid::new(0.02, 0.12, 1.2).mesh().build(), Transform::from_translation(at(Vec3::new(s * 0.335, 0.15, 0.1))).with_rotation(tilt), p.marking);
+        for z in [-0.6f32, 0.0, 0.6] {
+            h.mesh(Cuboid::new(0.7, 0.7, 0.06).mesh().build(), Transform::from_translation(at(Vec3::new(0.0, 0.0, z))).with_rotation(tilt), p.steel_dark);
+        }
+        // vier Rohre: dunkle Öffnung, darin die rote Spitze
+        for (dx, dy) in [(-0.16, -0.16), (0.16, -0.16), (-0.16, 0.16), (0.16, 0.16)] {
+            h.mesh(
+                Cylinder::new(0.12, 0.04).mesh().resolution(10).build(),
+                Transform::from_translation(at(Vec3::new(dx, dy, -0.86))).with_rotation(tilt * Quat::from_rotation_x(std::f32::consts::FRAC_PI_2)),
+                p.steel_dark,
+            );
+            h.mesh(
+                ConicalFrustum { radius_top: 0.0, radius_bottom: 0.08, height: 0.16 }.mesh().resolution(8).build(),
+                Transform::from_translation(at(Vec3::new(dx, dy, -0.84))).with_rotation(tilt * Quat::from_rotation_x(-std::f32::consts::FRAC_PI_2)),
+                warhead,
+            );
+        }
+        // Bereitschaftslampe hinten am Behälter
+        hg.mesh(Cuboid::new(0.14, 0.06, 0.01).mesh().build(), Transform::from_translation(at(Vec3::new(0.0, 0.2, 0.86))).with_rotation(tilt), Vec3::ONE);
+    }
+    // Zielradar oben auf der Gabel
+    h.cuboid(Vec3::new(0.0, 0.75, 0.05), Vec3::new(0.3, 0.2, 0.36), Quat::IDENTITY, p.metal);
+    h.cuboid(Vec3::new(0.0, 1.0, 0.05), Vec3::new(0.5, 0.3, 0.04), Quat::from_rotation_x(-0.2), lin(Color::srgb(0.78, 0.78, 0.75)));
+    hg.cuboid(Vec3::new(0.0, 0.75, -0.135), Vec3::new(0.16, 0.08, 0.01), Quat::IDENTITY, Vec3::ONE);
+    h.weather(p.dust, 0.0, 0.0);
+
+    StructMeshes {
+        body: meshes.add(g.build().expect("Raketenturm")),
+        glow: meshes.add(glow.build().expect("Raketenturm-Licht")),
+        glass: None,
+        lamps: None,
+        head: Some((meshes.add(h.build().expect("Werfer-Kopf")), meshes.add(hg.build().expect("Werfer-Licht")), Vec3::Y * (top + 1.3))),
+        spin: None,
+        door: None,
+        height: 3.6,
+        vents: Vec::new(),
+    }
+}

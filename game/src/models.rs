@@ -31,7 +31,7 @@ pub struct ModelKit {
     /// Beton und Bauteile der Gebäude (Farbe aus den Vertexfarben)
     pub building_mat: Handle<StandardMaterial>,
     /// Baubare Gebäude je Typ (Geschützturm, Raffinerie, Fabrik) und Team
-    pub structures: [[StructMeshes; 2]; 5],
+    pub structures: [[StructMeshes; 2]; 6],
     /// Bauvorschau: gültiger und ungültiger Platz
     pub ghost: [Handle<StandardMaterial>; 2],
     /// Lampen und Fenster: unbeleuchtet, Helligkeit in den Vertexfarben
@@ -133,6 +133,7 @@ impl ModelKit {
                 [buildings::build_factory(PLAYER, meshes), buildings::build_factory(ENEMY, meshes)],
                 [buildings::build_wall(PLAYER, meshes), buildings::build_wall(ENEMY, meshes)],
                 [buildings::build_gate(PLAYER, meshes), buildings::build_gate(ENEMY, meshes)],
+                [buildings::build_rocket_tower(PLAYER, meshes), buildings::build_rocket_tower(ENEMY, meshes)],
             ],
             ghost: [
                 ghost(mats, Color::srgba(0.35, 1.0, 0.5, 0.38)),

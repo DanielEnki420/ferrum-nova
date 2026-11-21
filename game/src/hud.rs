@@ -152,6 +152,7 @@ pub fn setup_hud(mut commands: Commands) {
             build_button(BuildItem::Structure(BuildingKind::Geschuetzturm), "G"),
             build_button(BuildItem::Structure(BuildingKind::Raffinerie), "H"),
             build_button(BuildItem::Structure(BuildingKind::Fabrik), "J"),
+            build_button(BuildItem::Structure(BuildingKind::Raketenturm), "U"),
             build_button(BuildItem::Structure(BuildingKind::Mauer), "K"),
             build_button(BuildItem::Structure(BuildingKind::Tor), "I"),
         ],
@@ -385,7 +386,7 @@ pub fn scale_ui(
     mut ui_scale: ResMut<UiScale>,
 ) {
     let Ok(win) = window.single() else { return };
-    let s = (win.width() / 1150.0).clamp(0.55, 1.0);
+    let s = (win.width() / 1250.0).clamp(0.55, 1.0);
     if (ui_scale.0 - s).abs() > 0.01 {
         ui_scale.0 = s;
     }
