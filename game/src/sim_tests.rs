@@ -525,3 +525,223 @@ fn full_match_ai_builds_up_and_attacks() {
         "Angriffe zeigen keine Wirkung: Ausgang {outcome:?}, Spieler-HQ {player_hq:?}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Steuerung: Formation, Befehlsschlange, Patrouille, Stellung halten, Sammelpunkt
+// ---------------------------------------------------------------------------
+
+use crate::orders::*;
+
+/// Befehle wie aus der Eingabe absetzen
+fn order(app: &mut App, f: impl FnOnce(&mut Commands)) {
+    let world = app.world_mut();
+    let mut c = world.commands();
+    f(&mut c);
+    world.flush();
+}
+
+fn member(app: &App, e: Entity) -> Member {
+    let u = app.world().get::<Unit>(e).unwrap();
+    Member {
+        e,
+        pos: pos_of(app, e),
+        speed: u.speed,
+        radius: u.radius,
+        armed: app.world().get::<Weapon>(e).is_some(),
+        harvester: app.world().get::<Harvester>(e).is_some(),
+    }
+}
+
+/// Formation: genug Abstand, mittig um das Ziel; Frontlinie über die ganze Breite; Wege kreuzen sich nicht
+#[test]
+fn formation_slots_line_up_without_crossing() {
+    let slots = formation_slots(6, Vec3::ZERO, Vec3::Z, None, 3.0, false);
+    assert_eq!(slots.len(), 6);
+    for i in 0..6 {
+        for j in i + 1..6 {
+            assert!(slots[i].distance(slots[j]) >= 2.99, "Plätze zu eng: {:?}", slots);
+        }
+    }
+    let mean = slots.iter().sum::<Vec3>() / 6.0;
+    assert!(mean.length() < 0.01, "Formation nicht mittig: {mean}");
+
+    // 4 Einheiten auf einer 12-m-Linie: eine Reihe von Ende zu Ende
+    let line = formation_slots(4, Vec3::ZERO, Vec3::Z, Some(12.0), 3.0, true);
+    assert!(line.iter().all(|s| s.z.abs() < 0.01), "nicht auf der Linie: {line:?}");
+    let max_x = line.iter().map(|s| s.x.abs()).fold(0.0, f32::max);
+    assert!((max_x - 6.0).abs() < 0.01, "Linie nicht voll genutzt: {line:?}");
+
+    // Einheiten nebeneinander: Reihenfolge quer zur Fahrtrichtung bleibt erhalten
+    let units: Vec<Vec3> = [5.0, -3.0, 1.0, -7.0].iter().map(|x| Vec3::new(*x, 0.0, -20.0)).collect();
+    let a = assign_slots(&units, &line, Vec3::Z);
+    let mut used = a.clone();
+    used.sort();
+    assert_eq!(used, vec![0, 1, 2, 3], "keine Eins-zu-eins-Zuordnung");
+    for i in 0..4 {
+        for j in 0..4 {
+            if units[i].x < units[j].x {
+                assert!(line[a[i]].x < line[a[j]].x, "Wege kreuzen sich");
+            }
+        }
+    }
+}
+
+/// Shift+Rechtsklick: Ziele werden nacheinander angefahren
+#[test]
+fn shift_queue_follows_waypoints() {
+    let mut app = app();
+    app.add_systems(Update, (snapshot, follow_orders, movement).chain());
+    let tank = unit(&mut app, PLAYER, UnitKind::Panzer, Vec3::ZERO, 1.0);
+    let a = Vec3::new(12.0, 0.0, 0.0);
+    let b = Vec3::new(12.0, 0.0, 12.0);
+    let m = member(&app, tank);
+    order(&mut app, |c| {
+        issue_group_move(c, &[m], a, None, MoveKind::Move, false);
+        issue_group_move(c, &[m], b, None, MoveKind::Move, true);
+    });
+    assert_eq!(app.world().get::<Waypoints>(tank).map(|w| w.0.len()), Some(1));
+    let mut near_a = f32::MAX;
+    for _ in 0..120 {
+        app.update();
+        near_a = near_a.min(flat(pos_of(&app, tank)).distance(a));
+    }
+    assert!(near_a < 1.0, "erstes Ziel nicht erreicht: {near_a}");
+    assert!(flat(pos_of(&app, tank)).distance(b) < 1.0, "zweites Ziel nicht erreicht");
+    assert!(app.world().get::<Waypoints>(tank).is_none(), "Befehlsschlange nicht abgearbeitet");
+}
+
+/// Patrouille: pendelt zwischen Start und Ziel
+#[test]
+fn patrol_goes_back_and_forth() {
+    let mut app = app();
+    app.add_systems(Update, (snapshot, follow_orders, movement).chain());
+    let tank = unit(&mut app, PLAYER, UnitKind::Panzer, Vec3::ZERO, 1.0);
+    let b = Vec3::new(15.0, 0.0, 0.0);
+    let m = member(&app, tank);
+    order(&mut app, |c| issue_group_move(c, &[m], b, None, MoveKind::Patrol, false));
+    let (mut at_b, mut back_at_a) = (false, false);
+    for _ in 0..200 {
+        app.update();
+        let p = flat(pos_of(&app, tank));
+        if p.distance(b) < 1.5 {
+            at_b = true;
+        }
+        if at_b && p.length() < 1.5 {
+            back_at_a = true;
+        }
+    }
+    assert!(at_b && back_at_a, "Patrouille pendelt nicht (Ziel {at_b}, zurück {back_at_a})");
+    assert!(app.world().get::<AttackMove>(tank).is_some(), "Patrouille greift unterwegs nicht an");
+}
+
+/// Stellung halten: kein Nachfahren auf Gegner außer Reichweite; ohne Halten fährt die Einheit hin
+#[test]
+fn hold_position_does_not_chase() {
+    let mut app = app();
+    app.add_systems(Update, (snapshot, crate::units::auto_target, movement).chain());
+    let holder = unit(&mut app, PLAYER, UnitKind::Panzer, Vec3::ZERO, 1.0);
+    app.world_mut().entity_mut(holder).insert(HoldPosition);
+    unit(&mut app, ENEMY, UnitKind::Panzer, Vec3::new(14.0, 0.0, 0.0), 1.0);
+    let free = unit(&mut app, PLAYER, UnitKind::Panzer, Vec3::new(0.0, 0.0, 40.0), 1.0);
+    unit(&mut app, ENEMY, UnitKind::Panzer, Vec3::new(14.0, 0.0, 40.0), 1.0);
+    let (h0, f0) = (pos_of(&app, holder), pos_of(&app, free));
+    for _ in 0..30 {
+        app.update();
+    }
+    assert!(flat(pos_of(&app, holder) - h0).length() < 0.1, "haltende Einheit ist losgefahren");
+    assert!(flat(pos_of(&app, free) - f0).length() > 1.0, "freie Einheit greift nicht an");
+}
+
+/// Gruppen fahren im Tempo der langsamsten Einheit und drehen sich am Ziel in Blickrichtung
+#[test]
+fn group_moves_at_slowest_speed_and_faces_forward() {
+    let mut app = app();
+    app.add_systems(Update, (snapshot, follow_orders, movement, face_on_arrival).chain());
+    let fast = unit(&mut app, PLAYER, UnitKind::Spaeher, Vec3::new(-2.0, 0.0, 0.0), 1.0);
+    let slow = unit(&mut app, PLAYER, UnitKind::Bollwerk, Vec3::new(2.0, 0.0, 0.0), 1.0);
+    let goal = Vec3::new(0.0, 0.0, -40.0);
+    let ms = [member(&app, fast), member(&app, slow)];
+    order(&mut app, |c| issue_group_move(c, &ms, goal, None, MoveKind::Move, false));
+    for _ in 0..40 {
+        app.update();
+    }
+    let (df, ds) = (flat(pos_of(&app, fast)).distance(goal), flat(pos_of(&app, slow)).distance(goal));
+    assert!((df - ds).abs() < 2.0, "Gruppe zieht sich auseinander: {df} / {ds}");
+    for _ in 0..200 {
+        app.update();
+    }
+    for e in [fast, slow] {
+        assert!(flat(pos_of(&app, e)).distance(goal) < 4.0, "Ziel nicht erreicht");
+        assert!(app.world().get::<GroupSpeed>(e).is_none(), "Gruppentempo bleibt nach Ankunft");
+        let h = app.world().get::<Heading>(e).unwrap().0;
+        let want = Heading::from_dir(Vec3::NEG_Z).0;
+        let diff = (h - want + std::f32::consts::PI).rem_euclid(std::f32::consts::TAU) - std::f32::consts::PI;
+        assert!(diff.abs() < 0.1, "nicht in Marschrichtung ausgerichtet: {diff}");
+    }
+}
+
+/// Stopp hebt alle Befehle auf
+#[test]
+fn stop_clears_all_orders() {
+    let mut app = app();
+    let tank = unit(&mut app, PLAYER, UnitKind::Panzer, Vec3::ZERO, 1.0);
+    let m = member(&app, tank);
+    order(&mut app, |c| {
+        issue_group_move(c, &[m], Vec3::new(10.0, 0.0, 0.0), None, MoveKind::Patrol, false);
+        issue_group_move(c, &[m], Vec3::new(20.0, 0.0, 0.0), None, MoveKind::Move, true);
+    });
+    assert!(app.world().get::<Patrol>(tank).is_some() && app.world().get::<Waypoints>(tank).is_some());
+    order(&mut app, |c| clear_orders(&mut c.entity(tank)));
+    let w = app.world();
+    assert!(w.get::<MoveTo>(tank).is_none() && w.get::<Patrol>(tank).is_none() && w.get::<Waypoints>(tank).is_none() && w.get::<AttackMove>(tank).is_none());
+}
+
+/// Sammelpunkt: neue Kampfeinheiten fahren hin, neue Sammler bauen am Sammelfeld ab
+#[test]
+fn rally_point_directs_new_units() {
+    let mut app = app();
+    app.add_systems(Update, crate::units::production);
+    spawn_hq(&mut app, PLAYER, PLAYER_HQ_POS);
+    spawn_fields(&mut app);
+    let node = app.world_mut().query_filtered::<Entity, With<ResourceNode>>().iter(app.world()).next().unwrap();
+    let rally = Vec3::new(-30.0, 0.0, 30.0);
+    let hq = app.world_mut().query_filtered::<Entity, With<Hq>>().iter(app.world()).next().unwrap();
+    app.world_mut().entity_mut(hq).insert(Rally { pos: rally, node: None });
+    {
+        let mut h = app.world_mut().get_mut::<Hq>(hq).unwrap();
+        h.queue = vec![UnitKind::Panzer];
+        h.progress = 1000.0;
+    }
+    app.update();
+    let mut q = app.world_mut().query::<(&Unit, &MoveTo)>();
+    let (u, mv) = q.iter(app.world()).next().expect("keine Einheit gebaut");
+    assert_eq!(u.kind, UnitKind::Panzer);
+    assert!(mv.0.distance(rally) < 0.01, "fährt nicht zum Sammelpunkt");
+
+    app.world_mut().entity_mut(hq).insert(Rally { pos: rally, node: Some(node) });
+    {
+        let mut h = app.world_mut().get_mut::<Hq>(hq).unwrap();
+        h.queue = vec![UnitKind::Sammler];
+        h.progress = 1000.0;
+    }
+    app.update();
+    let mut q = app.world_mut().query::<&Harvester>();
+    let h = q.iter(app.world()).next().expect("kein Sammler gebaut");
+    assert_eq!(h.node, Some(node));
+    assert_eq!(h.state, HarvestState::ToNode);
+}
+
+/// Angriffsmeldungen: nahe Treffer zählen als ein Angriff, die Leertaste springt nur zu frischen
+#[test]
+fn alerts_merge_and_expire() {
+    let mut a = Alerts::default();
+    a.hit(Vec3::new(0.0, 0.0, 0.0));
+    a.hit(Vec3::new(3.0, 0.0, 0.0));
+    assert_eq!(a.pings.len(), 1);
+    a.hit(Vec3::new(40.0, 0.0, 0.0));
+    assert_eq!(a.pings.len(), 2);
+    assert_eq!(a.recent(), Some(Vec3::new(40.0, 0.0, 0.0)));
+    a.tick(ALERT_SHOW + 1.0);
+    assert!(a.recent().is_none());
+    assert!(a.pings.is_empty());
+}

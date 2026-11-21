@@ -29,6 +29,31 @@ pub struct QueueText;
 pub struct SelectionText;
 #[derive(Component)]
 pub struct OutcomeText;
+#[derive(Component)]
+pub struct AlertText;
+
+/// Leiste mit den ausgewählten Einheiten (über der unteren Leiste)
+#[derive(Component)]
+pub struct SelectionPanel;
+
+/// Karte einer ausgewählten Einheit; Klick wählt nur sie, Shift+Klick nimmt sie heraus
+#[derive(Component)]
+pub struct SelCard(pub Entity);
+
+/// Lebensbalken einer Karte
+#[derive(Component)]
+pub struct SelCardBar(pub Entity);
+
+/// Tasten für die Bau-Knöpfe: Einheiten in `UnitKind::ALL`-Reihenfolge, dann Gebäude
+pub const UNIT_KEYS: [(KeyCode, &str); 6] = [
+    (KeyCode::KeyX, "X"),
+    (KeyCode::KeyC, "C"),
+    (KeyCode::KeyV, "V"),
+    (KeyCode::KeyB, "B"),
+    (KeyCode::KeyN, "N"),
+    (KeyCode::KeyM, "M"),
+];
+const MAX_CARDS: usize = 24;
 
 const PANEL: Color = Color::srgba(0.05, 0.07, 0.10, 0.88);
 const BTN: Color = Color::srgb(0.14, 0.20, 0.28);
@@ -97,7 +122,7 @@ pub fn setup_hud(mut commands: Commands) {
         children![
             label_col("FERRUM NOVA", 16.0, Color::srgb(0.55, 0.85, 1.0)),
             (label("", 16.0), StockText),
-            label("WASD Kamera | Q/E drehen | Rad Zoom | Leertaste Basis", 13.0),
+            label("WASD/Mitteltaste Kamera | Q/E drehen | Rad Zoom | Leertaste letzter Angriff | Pos1 Basis", 13.0),
         ],
     ));
 
@@ -115,15 +140,15 @@ pub fn setup_hud(mut commands: Commands) {
         },
         BackgroundColor(PANEL),
         children![
-            build_button(BuildItem::Unit(UnitKind::ALL[0]), "1"),
-            build_button(BuildItem::Unit(UnitKind::ALL[1]), "2"),
-            build_button(BuildItem::Unit(UnitKind::ALL[2]), "3"),
-            build_button(BuildItem::Unit(UnitKind::ALL[3]), "4"),
-            build_button(BuildItem::Unit(UnitKind::ALL[4]), "5"),
-            build_button(BuildItem::Unit(UnitKind::ALL[5]), "6"),
-            build_button(BuildItem::Structure(BuildingKind::Geschuetzturm), "7"),
-            build_button(BuildItem::Structure(BuildingKind::Raffinerie), "8"),
-            build_button(BuildItem::Structure(BuildingKind::Fabrik), "9"),
+            build_button(BuildItem::Unit(UnitKind::ALL[0]), UNIT_KEYS[0].1),
+            build_button(BuildItem::Unit(UnitKind::ALL[1]), UNIT_KEYS[1].1),
+            build_button(BuildItem::Unit(UnitKind::ALL[2]), UNIT_KEYS[2].1),
+            build_button(BuildItem::Unit(UnitKind::ALL[3]), UNIT_KEYS[3].1),
+            build_button(BuildItem::Unit(UnitKind::ALL[4]), UNIT_KEYS[4].1),
+            build_button(BuildItem::Unit(UnitKind::ALL[5]), UNIT_KEYS[5].1),
+            build_button(BuildItem::Structure(BuildingKind::Geschuetzturm), "G"),
+            build_button(BuildItem::Structure(BuildingKind::Raffinerie), "H"),
+            build_button(BuildItem::Structure(BuildingKind::Fabrik), "J"),
             (
                 Node {
                     flex_direction: FlexDirection::Column,
@@ -131,9 +156,52 @@ pub fn setup_hud(mut commands: Commands) {
                     row_gap: px(6),
                     ..default()
                 },
-                children![(label("", 14.0), QueueText), (label("", 14.0), SelectionText)],
+                children![(label("", 14.0), QueueText)],
             ),
         ],
+    ));
+
+    // Ausgewählte Einheiten
+    commands.spawn((
+        Node {
+            position_type: PositionType::Absolute,
+            left: px(8),
+            bottom: px(BOTTOM_PANEL_H + 44.0),
+            // feste Breite: 8 Karten je Reihe, weitere Reihen wachsen nach oben
+            width: px(8.0 * 68.0),
+            flex_wrap: FlexWrap::WrapReverse,
+            column_gap: px(4),
+            row_gap: px(4),
+            display: Display::None,
+            ..default()
+        },
+        SelectionPanel,
+    ));
+
+    // Bedienhinweise passend zur Auswahl
+    commands.spawn((
+        Node {
+            position_type: PositionType::Absolute,
+            left: px(8),
+            bottom: px(BOTTOM_PANEL_H + 4.0),
+            padding: UiRect::axes(px(6), px(2)),
+            border_radius: BorderRadius::all(px(4)),
+            ..default()
+        },
+        BackgroundColor(Color::srgba(0.05, 0.07, 0.10, 0.6)),
+        children![(label_col("", 12.0, Color::srgb(0.75, 0.82, 0.9)), SelectionText)],
+    ));
+
+    // Angriffsmeldung
+    commands.spawn((
+        Node {
+            position_type: PositionType::Absolute,
+            width: percent(100),
+            top: px(TOP_BAR_H + 10.0),
+            justify_content: JustifyContent::Center,
+            ..default()
+        },
+        children![(label_col("", 18.0, Color::srgb(1.0, 0.45, 0.35)), AlertText)],
     ));
 
     // Auswahlbox
@@ -201,8 +269,11 @@ pub fn build_buttons(
 }
 
 pub fn build_hotkeys(keys: Res<ButtonInput<KeyCode>>, mut w: MessageWriter<BuildRequest>) {
-    let keys_list = [KeyCode::Digit1, KeyCode::Digit2, KeyCode::Digit3, KeyCode::Digit4, KeyCode::Digit5, KeyCode::Digit6];
-    for (k, kind) in keys_list.into_iter().zip(UnitKind::ALL) {
+    // Strg/Cmd+Taste gehört dem Browser bzw. den Kontrollgruppen
+    if crate::input::modifiers(&keys).1 {
+        return;
+    }
+    for ((k, _), kind) in UNIT_KEYS.into_iter().zip(UnitKind::ALL) {
         if keys.just_pressed(k) {
             w.write(BuildRequest { team: PLAYER, kind });
         }
@@ -216,12 +287,15 @@ pub fn update_hud(
     hqs: Query<(&Team, &Hq)>,
     units: Query<(&Team, &Unit, Has<Selected>)>,
     structures: Query<(&Team, &Structure), Without<Construction>>,
+    selected_hq: Query<&Team, (With<Hq>, With<Selected>)>,
     placing: Res<Placing>,
+    alerts: Res<crate::orders::Alerts>,
     mut texts: ParamSet<(
         Query<&mut Text, With<StockText>>,
         Query<&mut Text, With<QueueText>>,
         Query<&mut Text, With<SelectionText>>,
         Query<&mut Text, With<OutcomeText>>,
+        Query<&mut Text, With<AlertText>>,
     )>,
 ) {
     let s = stock.0[PLAYER.0 as usize];
@@ -260,18 +334,21 @@ pub fn update_hud(
     }
     let sel_text = if let Some(k) = placing.kind {
         format!("{} platzieren: Linksklick | Shift: mehrere | Rechtsklick/Esc: abbrechen", k.name())
+    } else if counts.iter().sum::<i32>() == 0 && selected_hq.iter().any(|t| *t == PLAYER) {
+        "Hauptquartier: Rechtsklick setzt den Sammelpunkt (auf einem Feld: Sammler bauen dort ab)".to_string()
     } else if counts.iter().sum::<i32>() == 0 {
-        "Links: auswaehlen | F: alle Kampfeinheiten | Rechts: bewegen/angreifen/abbauen | Strg+Rechts: Angriffsmarsch".to_string()
+        "Links: auswaehlen | Doppelklick: gleicher Typ | F: alle Kampfeinheiten | 1-9: Gruppe abrufen".to_string()
     } else {
-        let parts: Vec<String> = UnitKind::ALL
-            .iter()
-            .filter(|k| counts[k.idx()] > 0)
-            .map(|k| format!("{} {}", counts[k.idx()], k.short_name()))
-            .collect();
-        format!("Auswahl: {}", parts.join(", "))
+        "Rechts: bewegen/angreifen | ziehen: Frontlinie | Shift: anhaengen | Strg: Angriffsmarsch\nAlt: Patrouille | R: Stopp | T: Stellung halten | Strg+1-9: Gruppe speichern".to_string()
     };
     if let Ok(mut t) = texts.p2().single_mut() {
         **t = sel_text;
+    }
+    if let Ok(mut t) = texts.p4().single_mut() {
+        **t = match alerts.last {
+            Some(_) if alerts.since < 4.0 => "Wir werden angegriffen!  [Leertaste]".to_string(),
+            _ => String::new(),
+        };
     }
     if let Ok(mut t) = texts.p3().single_mut() {
         **t = match *outcome {
@@ -349,5 +426,96 @@ pub fn update_perf(
         && let Ok(mut t) = texts.get_mut(c)
     {
         t.0 = format!("{fps:.0} FPS | {ms:.1} ms | {} Objekte", entities.iter().count());
+    }
+}
+
+/// Karten der ausgewählten Einheiten neu aufbauen, wenn sich die Auswahl ändert; Lebensbalken laufend
+pub fn update_selection_panel(
+    mut commands: Commands,
+    sel: Query<(Entity, &Team, &Unit, &Health), With<Selected>>,
+    mut panel: Query<(Entity, &mut Node), With<SelectionPanel>>,
+    mut bars: Query<(&SelCardBar, &mut Node, &mut BackgroundColor), Without<SelectionPanel>>,
+    mut shown: Local<Vec<Entity>>,
+) {
+    let Ok((panel_e, mut panel_node)) = panel.single_mut() else { return };
+    let mut list: Vec<(Entity, UnitKind)> = sel.iter().filter(|s| *s.1 == PLAYER).map(|s| (s.0, s.2.kind)).collect();
+    list.sort_by_key(|(e, k)| (k.idx(), *e));
+    let ids: Vec<Entity> = list.iter().map(|l| l.0).collect();
+    if ids != *shown {
+        *shown = ids;
+        commands.entity(panel_e).despawn_children();
+        panel_node.display = if list.is_empty() { Display::None } else { Display::Flex };
+        for (e, kind) in list.iter().take(MAX_CARDS) {
+            commands.spawn((
+                ChildOf(panel_e),
+                SelCard(*e),
+                RelativeCursorPosition::default(),
+                Node {
+                    width: px(64),
+                    height: px(34),
+                    flex_shrink: 0.0,
+                    flex_direction: FlexDirection::Column,
+                    justify_content: JustifyContent::SpaceBetween,
+                    padding: UiRect::all(px(3)),
+                    border: UiRect::all(px(1)),
+                    border_radius: BorderRadius::all(px(4)),
+                    ..default()
+                },
+                BorderColor::all(Color::srgb(0.35, 0.5, 0.65)),
+                BackgroundColor(BTN),
+                children![
+                    label(kind.short_name(), 11.0),
+                    (
+                        Node { width: percent(100), height: px(4), ..default() },
+                        BackgroundColor(Color::srgb(0.12, 0.12, 0.12)),
+                        children![(SelCardBar(*e), Node { width: percent(100), height: percent(100), ..default() }, BackgroundColor(Color::srgb(0.3, 1.0, 0.4)))],
+                    )
+                ],
+            ));
+        }
+        if list.len() > MAX_CARDS {
+            commands.spawn((ChildOf(panel_e), label(format!("+{}", list.len() - MAX_CARDS), 14.0)));
+        }
+    }
+    for (bar, mut node, mut bg) in &mut bars {
+        let Ok((_, _, _, h)) = sel.get(bar.0) else { continue };
+        let frac = (h.hp / h.max).clamp(0.0, 1.0);
+        node.width = percent(frac * 100.0);
+        let col = if frac > 0.6 {
+            Color::srgb(0.3, 1.0, 0.4)
+        } else if frac > 0.3 {
+            Color::srgb(1.0, 0.8, 0.2)
+        } else {
+            Color::srgb(1.0, 0.3, 0.25)
+        };
+        *bg = col.into();
+    }
+}
+
+/// Klick auf eine Karte: nur diese Einheit auswählen; Shift+Klick nimmt sie heraus
+pub fn selection_cards(
+    mut commands: Commands,
+    mut clicks: MessageReader<MouseButtonInput>,
+    keys: Res<ButtonInput<KeyCode>>,
+    mut cards: Query<(&SelCard, &RelativeCursorPosition, &mut BackgroundColor)>,
+    sel: Query<Entity, With<Selected>>,
+) {
+    let pressed = clicks.read().any(|c| c.button == MouseButton::Left && c.state == ButtonState::Pressed);
+    let shift = crate::input::modifiers(&keys).0;
+    for (card, rel, mut bg) in &mut cards {
+        let over = rel.cursor_over();
+        *bg = if over { BTN_HOVER } else { BTN }.into();
+        if !(over && pressed) {
+            continue;
+        }
+        if shift {
+            commands.entity(card.0).remove::<Selected>();
+        } else {
+            for e in &sel {
+                if e != card.0 {
+                    commands.entity(e).remove::<Selected>();
+                }
+            }
+        }
     }
 }

@@ -11,7 +11,9 @@ mod construction;
 mod fx;
 mod hud;
 mod input;
+mod minimap;
 mod models;
+mod orders;
 mod resources;
 mod splat;
 mod terrain;
@@ -54,20 +56,26 @@ fn main() {
         .init_resource::<units::Snapshot>()
         .init_resource::<input::CamRig>()
         .init_resource::<input::DragState>()
+        .init_resource::<input::ControlGroups>()
+        .init_resource::<input::Hover>()
+        .init_resource::<orders::Alerts>()
         .init_resource::<ai::AiState>()
         .init_resource::<construction::Placing>()
         .add_message::<units::BuildRequest>()
         .add_message::<construction::PlaceRequest>()
         .add_message::<fx::FxEvent>()
-        .add_systems(Startup, (world::setup_world, input::setup_camera, hud::setup_hud, hud::setup_perf, splat::load_terrain_textures, vegetation::setup_vegetation))
+        .add_systems(Startup, (world::setup_world, input::setup_camera, hud::setup_hud, hud::setup_perf, minimap::setup_minimap, splat::load_terrain_textures, vegetation::setup_vegetation))
         .add_systems(
             Update,
             ((
                 input::camera_control,
                 construction::placement_input,
                 input::mouse_commands,
+                input::order_hotkeys,
+                input::control_groups,
                 input::select_army,
                 hud::build_hotkeys,
+                minimap::minimap_input,
                 ai::enemy_ai,
                 ai::ai_tactics,
                 units::enqueue_builds,
@@ -79,7 +87,9 @@ fn main() {
                 units::snapshot,
                 units::auto_target,
                 units::combat,
+                orders::follow_orders,
                 units::movement,
+                orders::face_on_arrival,
                 units::separation,
                 units::vehicle_motion,
                 units::ground_snap,
@@ -91,13 +101,30 @@ fn main() {
                 units::repair,
                 units::deaths,
                 units::check_outcome,
+                orders::tick_alerts,
             )
                 .chain(),
             )
                 .chain()
                 .run_if(|o: Res<Outcome>| *o == Outcome::Running),
         )
-        .add_systems(Update, (input::draw_overlays, hud::build_buttons, hud::update_hud, hud::scale_ui, hud::update_perf, splat::finish_terrain))
+        .add_systems(
+            Update,
+            (
+                input::hover,
+                input::draw_overlays,
+                input::draw_orders,
+                orders::draw_markers,
+                hud::build_buttons,
+                hud::update_hud,
+                hud::update_selection_panel,
+                hud::selection_cards,
+                hud::scale_ui,
+                hud::update_perf,
+                minimap::update_minimap,
+                splat::finish_terrain,
+            ),
+        )
         // Optik: läuft auch nach Spielende weiter, damit Explosionen ausklingen
         .add_systems(
             Update,

@@ -52,14 +52,14 @@ cd web && npx astro preview
 ## Spielstand (Prototyp 0.1)
 
 - Zwei Rohstoffe: Ferrit (Kristalle) und Plasma (Quellen). Die Sammler fahren selbst zum knapperen Rohstoff.
-- Sechs Einheiten, gebaut im HQ über die Tasten 1–6 oder die Knöpfe:
+- Sechs Einheiten, gebaut im HQ über die Tasten X C V B N M (in dieser Reihenfolge) oder die Knöpfe:
   - **Sammler** (50 F): Sechsrad-Laster, dessen Erzbunker sich sichtbar füllt.
   - **Späher** (60 F / 10 P): schneller 4×4-Spähwagen mit Maschinenkanone.
   - **Panzer** (100 F / 25 P): Kampfpanzer, das Rückgrat der Armee.
   - **Bollwerk** (220 F / 90 P, braucht eine Fabrik): schwerer Panzer mit Reaktivpanzerung, Räumschild und Dachmaschinengewehr.
   - **Raketenwerfer** (80 F / 70 P): große Reichweite, Raketen mit Rauchspur.
   - **Haubitze** (150 F / 110 P, braucht eine Fabrik): Artillerie mit Stützspaten, Granaten im Bogen und Flächenschaden.
-- Drei baubare Gebäude (Tasten 7–9 oder Knöpfe). Eine durchscheinende Vorschau zeigt, ob der Platz passt: in Reichweite eigener Gebäude, auf ebenem Boden, mit Abstand zu Gebäuden und Rohstofffeldern. Linksklick baut, mit Shift mehrere, Rechtsklick oder Esc bricht ab. Das Gebäude wächst dann aus dem Boden und arbeitet erst, wenn es fertig ist.
+- Drei baubare Gebäude (Tasten G, H, J oder Knöpfe). Eine durchscheinende Vorschau zeigt, ob der Platz passt: in Reichweite eigener Gebäude, auf ebenem Boden, mit Abstand zu Gebäuden und Rohstofffeldern. Linksklick baut, mit Shift mehrere, Rechtsklick oder Esc bricht ab. Das Gebäude wächst dann aus dem Boden und arbeitet erst, wenn es fertig ist.
   - **Geschützturm** (120 F / 40 P): Betonsockel mit Brüstung, Drehkopf mit Zwillingsrohren. Verteidigt die Basis selbstständig.
   - **Raffinerie** (150 F / 0 P): Halle, zwei Silos auf Stelzen, Abladebucht mit Förderband. Sammler liefern an der nächsten Abladestelle ab, das verkürzt ihre Wege.
   - **Fabrik** (200 F / 80 P): Halle mit Sheddach, Portalkran und Kühlaggregat. Jede Fabrik beschleunigt die Produktion im HQ um 40 % (bis zu drei zählen).
@@ -81,14 +81,22 @@ cd web && npx astro preview
   - **Gebäudeeinsturz:** Zerstörte Gebäude sacken unter mehreren Explosionen ab und kippen. Eine Staubwolke quillt heraus, zurück bleibt ein brennender Trümmerhaufen mit Wandresten und verbogenen Trägern.
   - **Umgebung:** Die Raffinerie dampft, die Fabrikschornsteine rauchen, auf Baustellen sprühen Schweißfunken mit bläulichem Lichtbogen, über den Plasmaquellen steigen violett leuchtende Teilchen auf.
 - Leistung: Statisches (Felsen, Vegetation) ist pro Kartenkachel zu einem Mesh zusammengefasst, jedes Fahrzeug besteht aus drei bis vier Meshes. **F3** blendet FPS, Bildzeit und Objektzahl ein und aus.
-- Tests: `cargo test` im Ordner `game` lässt die Spiellogik ohne Grafik über simulierte Zeit laufen. Geprüft wird unter anderem, dass Sammler an der nächsten fertigen Raffinerie abladen, dass die KI ihre Gebäude an gültigen Plätzen errichtet dass ein zerstörtes Gebäude sofort aus dem Spiel ausscheidet, einstürzt und Trümmer hinterlässt, und wie sich die KI verhält: Konter, Flucht der Sammler, Verteidigung, Wellen mit Rückzug, Reparatur, Ausweichen der Haubitzen, Erkundung. Eine ganze Partie läuft dabei im Zeitraffer durch.
-- Steuerung: Linksklick oder Ziehen wählt aus, F wählt alle Kampfeinheiten. Rechtsklick bewegt, greift an oder baut ab. Strg+Rechtsklick ist ein Angriffsmarsch. WASD/Pfeile/Bildschirmrand bewegen die Kamera, Q/E drehen sie, das Mausrad zoomt.
+- Tests: `cargo test` im Ordner `game` lässt die Spiellogik ohne Grafik über simulierte Zeit laufen. Geprüft wird unter anderem, dass Sammler an der nächsten fertigen Raffinerie abladen, dass die KI ihre Gebäude an gültigen Plätzen errichtet, dass ein zerstörtes Gebäude sofort aus dem Spiel ausscheidet, einstürzt und Trümmer hinterlässt, und wie sich die KI verhält: Konter, Flucht der Sammler, Verteidigung, Wellen mit Rückzug, Reparatur, Ausweichen der Haubitzen, Erkundung. Für die Steuerung werden Formation und kreuzungsfreie Platzverteilung, Befehlsschlange, Patrouille, Stellung halten, Gruppentempo, Stopp, Sammelpunkt und Angriffsmeldungen geprüft. Eine ganze Partie läuft dabei im Zeitraffer durch.
+- Steuerung (auf dem Mac zählt auch Cmd als Strg):
+  - **Auswahl:** Linksklick oder Auswahlbox. Shift ergänzt, Strg+Klick oder Strg+Box nimmt Einheiten heraus. Doppelklick wählt alle eigenen Einheiten dieses Typs auf dem Bildschirm, F alle Kampfeinheiten. Auch eigene Gebäude lassen sich anklicken.
+  - **Kontrollgruppen:** Strg+1–9 speichert die Auswahl, Shift+1–9 ergänzt die Gruppe, 1–9 ruft sie ab, zweimal schnell drücken springt mit der Kamera hin.
+  - **Befehle:** Rechtsklick bewegt, greift an oder baut ab. Strg+Rechtsklick ist ein Angriffsmarsch, Alt+Rechtsklick eine Patrouille zwischen Standort und Ziel. Mit Shift wird der Befehl angehängt, so entstehen Wegpunkte. R stoppt, T lässt die Einheiten die Stellung halten (sie schießen nur auf Ziele in Reichweite und fahren nicht nach).
+  - **Formation:** Gruppen stellen sich am Ziel in Reihen quer zur Marschrichtung auf, ohne dass sich ihre Wege kreuzen, und fahren im Tempo der langsamsten Einheit. Mit gedrückter rechter Maustaste lässt sich eine Frontlinie ziehen. Die Einheiten verteilen sich dann über ihre Länge und blicken von der Gruppe weg nach vorn.
+  - **Sammelpunkt:** HQ anklicken, dann Rechtsklick. Neue Kampfeinheiten fahren dorthin. Liegt der Punkt auf einem Rohstofffeld, bauen neue Sammler dort ab.
+  - **Rückmeldung:** Befehlsmarker am Boden (grün bewegen, orange Angriffsmarsch, rot Angriff, blau Patrouille, gelb Sammelpunkt). Für die Auswahl werden Wegpunkte, Ziele und Patrouillenstrecken eingezeichnet. Unter dem Mauszeiger leuchten Einheiten, Gegner und Felder auf, der Mauszeiger wechselt zum Fadenkreuz über Gegnern. Über der unteren Leiste zeigt eine Kartenreihe die ausgewählten Einheiten mit Lebensbalken: Klick wählt nur diese Einheit, Shift+Klick nimmt sie heraus. Eine Hinweiszeile nennt die passenden Befehle.
+  - **Kamera:** WASD, Pfeiltasten, Bildschirmrand oder mittlere Maustaste ziehen. Q/E drehen, das Mausrad zoomt zum Mauszeiger hin. Leertaste springt zum letzten Angriff auf eigene Einheiten (bis 15 Sekunden danach, sonst zur Basis), Pos1 zur Basis.
+  - **Minikarte** (unten rechts): Gelände, Felder, Gebäude, Einheiten, Sichtbereich der Kamera und rot blinkende Angriffsmeldungen. Linksklick oder Ziehen bewegt die Kamera, Rechtsklick schickt die Auswahl hin (mit Strg/Alt/Shift wie oben).
 
 ## Mögliche nächste Schritte
 
 - Baukasten aus Chassis und Waffe, Forschungsbaum
 - Pionierfahrzeug, das Gebäude errichtet, und weitere Gebäudetypen (Forschung, Radar)
-- Nebel des Krieges und Minikarte
+- Nebel des Krieges
 - Diplomatie mit mehreren KI-Fraktionen
 - Mehrspieler über einen Rust-Server (WebSockets)
 - Texturen als KTX2 (GPU-komprimiert) statt JPG, sobald KTX-Software verfügbar ist

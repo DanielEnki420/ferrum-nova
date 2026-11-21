@@ -149,9 +149,9 @@ pub fn placement_input(
     mut gizmos: Gizmos,
 ) {
     for (key, kind) in [
-        (KeyCode::Digit7, BuildingKind::Geschuetzturm),
-        (KeyCode::Digit8, BuildingKind::Raffinerie),
-        (KeyCode::Digit9, BuildingKind::Fabrik),
+        (KeyCode::KeyG, BuildingKind::Geschuetzturm),
+        (KeyCode::KeyH, BuildingKind::Raffinerie),
+        (KeyCode::KeyJ, BuildingKind::Fabrik),
     ] {
         if keys.just_pressed(key) {
             placing.kind = if placing.kind == Some(kind) { None } else { Some(kind) };

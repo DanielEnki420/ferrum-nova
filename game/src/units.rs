@@ -1,6 +1,7 @@
 use crate::components::*;
 use crate::fx::FxEvent;
 use crate::models::ModelKit;
+use crate::orders::{Alerts, GroupSpeed, HoldPosition, Rally};
 use crate::terrain;
 use crate::world::spawn_unit;
 use bevy::light::NotShadowCaster;
@@ -52,14 +53,15 @@ pub fn snapshot(
 pub fn auto_target(
     mut commands: Commands,
     snap: Res<Snapshot>,
-    q: Query<(Entity, &Weapon, &Team, Has<MoveTo>, Has<AttackMove>), (Without<AttackTarget>, Without<Construction>)>,
+    q: Query<(Entity, &Weapon, &Team, Has<MoveTo>, Has<AttackMove>, Has<HoldPosition>), (Without<AttackTarget>, Without<Construction>)>,
 ) {
-    for (e, w, team, moving, amove) in &q {
+    for (e, w, team, moving, amove, hold) in &q {
         if moving && !amove {
             continue;
         }
         let Some(me) = snap.0.get(&e) else { continue };
-        let sight = w.range + 6.0;
+        // wer die Stellung hält, sucht nur Ziele in Schussweite
+        let sight = if hold { w.range } else { w.range + 6.0 };
         let mut best: Option<(Entity, f32)> = None;
         for (oe, o) in &snap.0 {
             if o.team == *team {
@@ -168,17 +170,23 @@ pub fn movement(
         Option<&MoveTo>,
         Option<&AttackTarget>,
         Option<&Weapon>,
+        Option<&GroupSpeed>,
+        Has<HoldPosition>,
     )>,
 ) {
     let dt = time.delta_secs();
-    for (e, unit, mut t, mut heading, mv, atk, w) in &mut q {
+    for (e, unit, mut t, mut heading, mv, atk, w, group, hold) in &mut q {
         let me = flat(t.translation);
         let mut goal: Option<(Vec3, f32)> = None;
         let mut engaged = false;
         if let (Some(a), Some(w)) = (atk, w)
             && let Some(tgt) = snap.0.get(&a.0) {
                 engaged = true;
-                if dist2d(me, tgt.pos) - tgt.radius > w.range * 0.95 {
+                let out_of_range = dist2d(me, tgt.pos) - tgt.radius > w.range * 0.95;
+                if out_of_range && hold {
+                    // Stellung halten: nicht nachfahren, Ziel aufgeben
+                    commands.entity(e).remove::<AttackTarget>();
+                } else if out_of_range {
                     goal = Some((flat(tgt.pos), 0.0));
                 }
             }
@@ -190,7 +198,7 @@ pub fn movement(
         let to = g - me;
         let d = to.length();
         if d <= arrive.max(0.05) {
-            commands.entity(e).remove::<MoveTo>().remove::<AttackMove>();
+            commands.entity(e).remove::<(MoveTo, AttackMove, GroupSpeed)>();
             continue;
         }
         let dir = to / d;
@@ -199,7 +207,12 @@ pub fn movement(
         let diff = angle_diff(heading.0, want);
         heading.0 += diff.clamp(-3.2 * dt, 3.2 * dt);
         let align = (1.0 - diff.abs() / 1.2).clamp(0.15, 1.0);
-        let step = (unit.speed * align * dt).min(d);
+        // Gruppen fahren im Tempo der langsamsten Einheit (nicht im Gefecht)
+        let speed = match group {
+            Some(g) if !engaged => unit.speed.min(g.0),
+            _ => unit.speed,
+        };
+        let step = (speed * align * dt).min(d);
         t.translation += dir * step;
     }
 }
@@ -382,6 +395,7 @@ pub fn projectiles(
     mut fx: MessageWriter<FxEvent>,
     mut q: Query<(Entity, &mut Transform, &mut Projectile)>,
     mut health: Query<&mut Health>,
+    mut alerts: Option<ResMut<Alerts>>,
 ) {
     let dt = time.delta_secs();
     for (e, mut t, mut p) in &mut q {
@@ -394,6 +408,11 @@ pub fn projectiles(
         let d = to.length();
         let step = p.speed * dt;
         if d <= step + tgt.radius * 0.4 {
+            if tgt.team == PLAYER
+                && let Some(a) = alerts.as_mut()
+            {
+                a.hit(tgt.pos);
+            }
             if p.splash > 0.0 {
                 // Flächenschaden: alle Gegner im Umkreis, nach außen schwächer
                 for (oe, o) in &snap.0 {
@@ -527,10 +546,10 @@ pub fn production(
     mut commands: Commands,
     time: Res<Time>,
     kit: Res<ModelKit>,
-    mut hqs: Query<(&Team, &mut Hq, &Transform)>,
+    mut hqs: Query<(&Team, &mut Hq, &Transform, Option<&Rally>)>,
     factories: Query<(&Team, &Structure), Without<Construction>>,
 ) {
-    for (team, mut hq, t) in &mut hqs {
+    for (team, mut hq, t, rally) in &mut hqs {
         let n = factories.iter().filter(|(ft, s)| *ft == team && s.0 == BuildingKind::Fabrik).count();
         let Some(&kind) = hq.queue.first() else {
             hq.progress = 0.0;
@@ -543,8 +562,18 @@ pub fn production(
             let dir = if *team == PLAYER { Vec3::new(1.0, 0.0, -1.0) } else { Vec3::new(-1.0, 0.0, 1.0) }.normalize();
             let spawn = flat(t.translation) + dir * 7.0;
             let e = spawn_unit(&mut commands, &kit, *team, kind, spawn);
-            if kind != UnitKind::Sammler {
-                commands.entity(e).insert(MoveTo(spawn + dir * 6.0));
+            match (kind, rally) {
+                // Sammler mit Sammelpunkt auf einem Feld bauen dort ab
+                (UnitKind::Sammler, Some(Rally { node: Some(node), .. })) => {
+                    commands.entity(e).insert(Harvester { state: HarvestState::ToNode, node: Some(*node), cargo: 0, cargo_kind: ResKind::Ferrit });
+                }
+                (UnitKind::Sammler, _) => {}
+                (_, Some(r)) => {
+                    commands.entity(e).insert(MoveTo(r.pos));
+                }
+                _ => {
+                    commands.entity(e).insert(MoveTo(spawn + dir * 6.0));
+                }
             }
         }
     }
