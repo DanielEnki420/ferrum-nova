@@ -65,7 +65,30 @@ pub struct Weapon {
     pub cooldown: f32,
     pub timer: f32,
     pub projectile_speed: f32,
+    pub rocket: bool,
 }
+
+/// Fahrtrichtung als Winkel um die Hochachse (0 = Blick nach -Z)
+#[derive(Component)]
+pub struct Heading(pub f32);
+
+impl Heading {
+    pub fn from_dir(d: Vec3) -> Self {
+        Heading(f32::atan2(-d.x, -d.z))
+    }
+}
+
+/// Drehbarer Turm / Werfer eines Fahrzeugs (Kind-Entity)
+#[derive(Component)]
+pub struct Turret {
+    pub tilt: f32,
+    pub base_y: f32,
+    pub base_z: f32,
+}
+
+/// Verweis vom Fahrzeug auf seinen Turm
+#[derive(Component)]
+pub struct TurretRef(pub Entity);
 
 /// Bewegungsziel auf dem Boden
 #[derive(Component)]
@@ -112,6 +135,7 @@ impl ResKind {
 pub struct ResourceNode {
     pub kind: ResKind,
     pub amount: u32,
+    pub max: u32,
 }
 
 #[derive(Clone, Copy, PartialEq, Debug)]
@@ -138,6 +162,8 @@ pub struct Projectile {
     pub target: Entity,
     pub damage: f32,
     pub speed: f32,
+    pub rocket: bool,
+    pub smoke_timer: f32,
 }
 
 /// Bestände je Team: [Ferrit, Plasma]
@@ -162,19 +188,6 @@ pub enum Outcome {
     Running,
     Won,
     Lost,
-}
-
-/// Wiederverwendbare Meshes und Materialien
-#[derive(Resource)]
-pub struct Assets3d {
-    pub sammler: Handle<Mesh>,
-    pub panzer: Handle<Mesh>,
-    pub werfer: Handle<Mesh>,
-    pub turret: Handle<Mesh>,
-    pub projectile: Handle<Mesh>,
-    pub team_mat: [Handle<StandardMaterial>; 2],
-    pub accent_mat: [Handle<StandardMaterial>; 2],
-    pub projectile_mat: [Handle<StandardMaterial>; 2],
 }
 
 /// Kleiner deterministischer Zufallsgenerator (kein externes Crate nötig, auch im Browser)

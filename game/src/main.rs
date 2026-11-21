@@ -6,8 +6,11 @@
 
 mod ai;
 mod components;
+mod fx;
 mod hud;
 mod input;
+mod models;
+mod terrain;
 mod units;
 mod world;
 
@@ -28,7 +31,9 @@ fn main() {
             }),
             ..default()
         }))
-        .insert_resource(ClearColor(Color::srgb(0.05, 0.06, 0.08)))
+        .insert_resource(ClearColor(input::HAZE))
+        .insert_resource(bevy::light::DirectionalLightShadowMap { size: 4096 })
+        .insert_resource(Rng(0x2545_F491_4F6C_DD1D))
         .insert_resource(Stock([[200, 50], [200, 50]]))
         .init_resource::<Outcome>()
         .init_resource::<units::Snapshot>()
@@ -36,6 +41,7 @@ fn main() {
         .init_resource::<input::DragState>()
         .init_resource::<ai::AiState>()
         .add_message::<units::BuildRequest>()
+        .add_message::<fx::FxEvent>()
         .add_systems(Startup, (world::setup_world, input::setup_camera, hud::setup_hud))
         .add_systems(
             Update,
@@ -51,6 +57,8 @@ fn main() {
                 units::combat,
                 units::movement,
                 units::separation,
+                units::ground_snap,
+                units::turret_aim,
                 units::harvest,
                 units::projectiles,
                 units::production,
@@ -61,5 +69,18 @@ fn main() {
                 .run_if(|o: Res<Outcome>| *o == Outcome::Running),
         )
         .add_systems(Update, (input::draw_overlays, hud::build_buttons, hud::update_hud, hud::scale_ui))
+        // Optik: läuft auch nach Spielende weiter, damit Explosionen ausklingen
+        .add_systems(
+            Update,
+            (
+                fx::damage_smoke,
+                fx::spawn_effects,
+                fx::update_fx,
+                models::pulse_lights,
+                models::shrink_nodes,
+                input::update_shadows,
+            )
+                .chain(),
+        )
         .run();
 }

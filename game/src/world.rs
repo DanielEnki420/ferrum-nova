@@ -1,237 +1,167 @@
 use crate::components::*;
+use crate::fx::FxKit;
+use crate::models::{self, ModelKit};
+use crate::terrain::{self, FIELDS};
+use bevy::light::{CascadeShadowConfigBuilder, NotShadowCaster};
 use bevy::prelude::*;
 
 pub fn setup_world(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
     mut mats: ResMut<Assets<StandardMaterial>>,
+    mut images: ResMut<Assets<Image>>,
 ) {
-    let assets = Assets3d {
-        sammler: meshes.add(Cuboid::new(1.6, 1.0, 2.2)),
-        panzer: meshes.add(Cuboid::new(1.8, 0.8, 2.4)),
-        werfer: meshes.add(Cuboid::new(1.6, 1.4, 1.6)),
-        turret: meshes.add(Cuboid::new(0.7, 0.5, 1.4)),
-        projectile: meshes.add(Sphere::new(0.25)),
-        team_mat: [
-            mats.add(StandardMaterial {
-                base_color: Color::srgb(0.25, 0.55, 0.95),
-                perceptual_roughness: 0.6,
-                ..default()
-            }),
-            mats.add(StandardMaterial {
-                base_color: Color::srgb(0.85, 0.2, 0.25),
-                perceptual_roughness: 0.6,
-                ..default()
-            }),
-        ],
-        accent_mat: [
-            mats.add(Color::srgb(0.75, 0.85, 1.0)),
-            mats.add(Color::srgb(0.3, 0.05, 0.08)),
-        ],
-        projectile_mat: [
-            mats.add(StandardMaterial {
-                base_color: Color::srgb(0.6, 0.9, 1.0),
-                emissive: LinearRgba::rgb(2.0, 5.0, 8.0),
-                ..default()
-            }),
-            mats.add(StandardMaterial {
-                base_color: Color::srgb(1.0, 0.5, 0.3),
-                emissive: LinearRgba::rgb(8.0, 2.0, 0.5),
-                ..default()
-            }),
-        ],
-    };
+    let kit = ModelKit::new(&mut meshes, &mut mats);
+    commands.insert_resource(FxKit::new(&mut meshes, &mut mats));
 
-    // Boden
+    // Gelände
+    let (albedo, normal_map) = terrain::build_textures();
     commands.spawn((
-        Mesh3d(meshes.add(Plane3d::default().mesh().size(MAP_HALF * 2.0, MAP_HALF * 2.0))),
+        Mesh3d(meshes.add(terrain::build_mesh())),
         MeshMaterial3d(mats.add(StandardMaterial {
-            base_color: Color::srgb(0.32, 0.30, 0.24),
-            perceptual_roughness: 0.95,
+            base_color_texture: Some(images.add(albedo)),
+            normal_map_texture: Some(images.add(normal_map)),
+            perceptual_roughness: 0.96,
+            reflectance: 0.25,
             ..default()
         })),
         Transform::default(),
+        NotShadowCaster,
     ));
 
-    // Licht
+    // Sonne: tief stehend und warm, für lange Schatten
     commands.spawn((
         DirectionalLight {
-            illuminance: 9000.0,
+            illuminance: 11_000.0,
+            color: Color::srgb(1.0, 0.93, 0.82),
             shadow_maps_enabled: true,
             ..default()
         },
-        Transform::from_xyz(30.0, 60.0, 20.0).looking_at(Vec3::ZERO, Vec3::Y),
+        Transform::from_xyz(-40.0, 38.0, 30.0).looking_at(Vec3::ZERO, Vec3::Y),
+        CascadeShadowConfigBuilder {
+            num_cascades: 1,
+            maximum_distance: 140.0,
+            first_cascade_far_bound: 140.0,
+            ..default()
+        }
+        .build(),
     ));
     commands.insert_resource(GlobalAmbientLight {
-        brightness: 350.0,
+        color: Color::srgb(0.62, 0.70, 0.85),
+        brightness: 420.0,
         ..default()
     });
 
-    // Felsen als Deko
-    let rock_mesh = meshes.add(Cuboid::new(1.0, 1.0, 1.0));
-    let rock_mat = mats.add(Color::srgb(0.22, 0.21, 0.19));
+    // Felsen und Geröll
+    let rock_meshes: Vec<Handle<Mesh>> = (0..6).map(|s| meshes.add(terrain::rock_mesh(s + 1))).collect();
+    let rock_mats = [
+        mats.add(StandardMaterial { base_color: Color::srgb(0.34, 0.31, 0.27), perceptual_roughness: 0.93, ..default() }),
+        mats.add(StandardMaterial { base_color: Color::srgb(0.27, 0.25, 0.23), perceptual_roughness: 0.9, ..default() }),
+        mats.add(StandardMaterial { base_color: Color::srgb(0.42, 0.37, 0.30), perceptual_roughness: 0.95, ..default() }),
+    ];
     let mut rng = Rng(0x9E37_79B9_7F4A_7C15);
-    for _ in 0..40 {
-        let x = rng.range(-MAP_HALF + 5.0, MAP_HALF - 5.0);
-        let z = rng.range(-MAP_HALF + 5.0, MAP_HALF - 5.0);
+    let mut placed = 0;
+    while placed < 230 {
+        let edge_zone = placed >= 140;
+        let lim = if edge_zone { terrain::TERRAIN_HALF - 8.0 } else { MAP_HALF - 3.0 };
+        let x = rng.range(-lim, lim);
+        let z = rng.range(-lim, lim);
         let p = Vec3::new(x, 0.0, z);
-        if p.distance(PLAYER_HQ_POS) < 18.0 || p.distance(ENEMY_HQ_POS) < 18.0 {
+        if edge_zone && x.abs().max(z.abs()) < MAP_HALF {
             continue;
         }
-        let s = rng.range(1.0, 3.5);
+        if p.distance(PLAYER_HQ_POS) < 17.0 || p.distance(ENEMY_HQ_POS) < 17.0 {
+            continue;
+        }
+        if FIELDS.iter().any(|(f, _, _)| p.distance(*f) < 6.0) {
+            continue;
+        }
+        placed += 1;
+        // viele kleine Steine, wenige große Brocken
+        let r = rng.next_f32();
+        let s = if r < 0.55 { rng.range(0.25, 0.7) } else if r < 0.9 { rng.range(0.8, 1.8) } else { rng.range(2.0, 4.0) };
+        let s = if edge_zone { s * 2.2 } else { s };
+        let g = terrain::on_ground(p);
         commands.spawn((
-            Mesh3d(rock_mesh.clone()),
-            MeshMaterial3d(rock_mat.clone()),
-            Transform::from_xyz(x, s * 0.4, z)
-                .with_scale(Vec3::new(s, s * 0.8, s * 1.2))
-                .with_rotation(Quat::from_rotation_y(rng.range(0.0, std::f32::consts::PI))),
+            Mesh3d(rock_meshes[(rng.next_f32() * 6.0) as usize % 6].clone()),
+            MeshMaterial3d(rock_mats[(rng.next_f32() * 3.0) as usize % 3].clone()),
+            Transform::from_translation(g - Vec3::Y * s * 0.15)
+                .with_scale(Vec3::new(s * rng.range(0.8, 1.3), s, s * rng.range(0.8, 1.3)))
+                .with_rotation(Quat::from_rotation_y(rng.range(0.0, std::f32::consts::TAU))),
         ));
     }
 
-    // Ressourcenfelder: symmetrisch für beide Seiten
-    let ferrit_mesh = meshes.add(Cuboid::new(1.2, 2.0, 1.2));
-    let ferrit_mat = mats.add(StandardMaterial {
-        base_color: Color::srgb(0.3, 0.9, 0.7),
-        emissive: LinearRgba::rgb(0.2, 1.2, 0.8),
-        ..default()
-    });
-    let plasma_mesh = meshes.add(Cylinder::new(1.4, 0.6));
-    let plasma_mat = mats.add(StandardMaterial {
-        base_color: Color::srgb(0.9, 0.4, 1.0),
-        emissive: LinearRgba::rgb(2.5, 0.6, 3.0),
-        ..default()
-    });
-    let fields: [(Vec3, ResKind, u32); 7] = [
-        (Vec3::new(-28.0, 0.0, 50.0), ResKind::Ferrit, 1500),
-        (Vec3::new(-50.0, 0.0, 26.0), ResKind::Plasma, 1000),
-        (Vec3::new(-15.0, 0.0, 15.0), ResKind::Ferrit, 2500),
-        (Vec3::new(28.0, 0.0, -50.0), ResKind::Ferrit, 1500),
-        (Vec3::new(50.0, 0.0, -26.0), ResKind::Plasma, 1000),
-        (Vec3::new(15.0, 0.0, -15.0), ResKind::Ferrit, 2500),
-        (Vec3::new(0.0, 0.0, 0.0), ResKind::Plasma, 3000),
-    ];
-    for (pos, kind, amount) in fields {
+    // Rohstofffelder
+    for (i, (pos, kind, amount)) in FIELDS.into_iter().enumerate() {
+        let root = commands
+            .spawn((
+                Transform::from_translation(terrain::on_ground(pos)),
+                Visibility::default(),
+                ResourceNode { kind, amount, max: amount },
+            ))
+            .id();
         match kind {
-            ResKind::Ferrit => {
-                // Kristallgruppe
-                let parent = commands
-                    .spawn((
-                        Transform::from_translation(pos),
-                        Visibility::default(),
-                        ResourceNode { kind, amount },
-                    ))
-                    .id();
-                for (i, off) in [
-                    Vec3::new(0.0, 1.0, 0.0),
-                    Vec3::new(1.3, 0.7, 0.6),
-                    Vec3::new(-1.0, 0.6, 1.1),
-                    Vec3::new(0.4, 0.8, -1.3),
-                ]
-                .iter()
-                .enumerate()
-                {
-                    let child = commands
-                        .spawn((
-                            Mesh3d(ferrit_mesh.clone()),
-                            MeshMaterial3d(ferrit_mat.clone()),
-                            Transform::from_translation(*off)
-                                .with_rotation(Quat::from_euler(
-                                    EulerRot::XYZ,
-                                    0.2 * i as f32,
-                                    i as f32,
-                                    0.15,
-                                ))
-                                .with_scale(Vec3::splat(1.0 - 0.15 * i as f32)),
-                        ))
-                        .id();
-                    commands.entity(parent).add_child(child);
-                }
-            }
-            ResKind::Plasma => {
-                commands.spawn((
-                    Mesh3d(plasma_mesh.clone()),
-                    MeshMaterial3d(plasma_mat.clone()),
-                    Transform::from_translation(pos + Vec3::Y * 0.3),
-                    ResourceNode { kind, amount },
-                ));
-            }
+            ResKind::Ferrit => models::build_ferrit(&mut commands, &kit, root, i as u32),
+            ResKind::Plasma => models::build_plasma(&mut commands, &kit, root, i as u32),
         }
     }
 
     // Hauptquartiere
-    let hq_mesh = meshes.add(Cuboid::new(6.0, 3.0, 6.0));
-    let tower_mesh = meshes.add(Cylinder::new(1.2, 4.0));
     for (team, pos) in [(PLAYER, PLAYER_HQ_POS), (ENEMY, ENEMY_HQ_POS)] {
-        let t = team.0 as usize;
+        let facing = if team == PLAYER { Vec3::new(1.0, 0.0, -1.0) } else { Vec3::new(-1.0, 0.0, 1.0) };
         let hq = commands
             .spawn((
-                Mesh3d(hq_mesh.clone()),
-                MeshMaterial3d(assets.team_mat[t].clone()),
-                Transform::from_translation(pos + Vec3::Y * 1.5),
+                Transform::from_translation(terrain::on_ground(pos)).looking_to(-facing, Vec3::Y),
+                Visibility::default(),
                 team,
-                Health {
-                    hp: 3000.0,
-                    max: 3000.0,
-                },
-                Building { radius: 4.2 },
-                Hq {
-                    queue: Vec::new(),
-                    progress: 0.0,
-                },
+                Health { hp: 3000.0, max: 3000.0 },
+                Building { radius: 4.8 },
+                Hq { queue: Vec::new(), progress: 0.0 },
             ))
             .id();
-        let tower = commands
-            .spawn((
-                Mesh3d(tower_mesh.clone()),
-                MeshMaterial3d(assets.accent_mat[t].clone()),
-                Transform::from_xyz(1.5, 3.0, 1.5),
-            ))
-            .id();
-        commands.entity(hq).add_child(tower);
+        models::build_hq(&mut commands, &kit, hq, team);
     }
 
     // Startarmeen
     for i in 0..2 {
-        spawn_unit(&mut commands, &assets, PLAYER, UnitKind::Sammler, PLAYER_HQ_POS + Vec3::new(6.0 + i as f32 * 2.5, 0.0, -6.0));
-        spawn_unit(&mut commands, &assets, ENEMY, UnitKind::Sammler, ENEMY_HQ_POS + Vec3::new(-6.0 - i as f32 * 2.5, 0.0, 6.0));
+        let o = i as f32 * 2.8;
+        spawn_unit(&mut commands, &kit, PLAYER, UnitKind::Sammler, PLAYER_HQ_POS + Vec3::new(7.0 + o, 0.0, -7.0));
+        spawn_unit(&mut commands, &kit, ENEMY, UnitKind::Sammler, ENEMY_HQ_POS + Vec3::new(-7.0 - o, 0.0, 7.0));
     }
     for i in 0..3 {
-        spawn_unit(&mut commands, &assets, PLAYER, UnitKind::Panzer, PLAYER_HQ_POS + Vec3::new(8.0 + i as f32 * 2.5, 0.0, -1.0));
-        spawn_unit(&mut commands, &assets, ENEMY, UnitKind::Panzer, ENEMY_HQ_POS + Vec3::new(-8.0 - i as f32 * 2.5, 0.0, 1.0));
+        let o = i as f32 * 2.8;
+        spawn_unit(&mut commands, &kit, PLAYER, UnitKind::Panzer, PLAYER_HQ_POS + Vec3::new(9.0 + o, 0.0, -1.0));
+        spawn_unit(&mut commands, &kit, ENEMY, UnitKind::Panzer, ENEMY_HQ_POS + Vec3::new(-9.0 - o, 0.0, 1.0));
     }
 
-    commands.insert_resource(assets);
+    commands.insert_resource(kit);
 }
 
-pub fn spawn_unit(commands: &mut Commands, a: &Assets3d, team: Team, kind: UnitKind, pos: Vec3) -> Entity {
-    let t = team.0 as usize;
-    let (mesh, hp, speed, radius, weapon, y) = match kind {
-        UnitKind::Sammler => (a.sammler.clone(), 160.0, 7.0, 1.2, None, 0.5),
+pub fn spawn_unit(commands: &mut Commands, kit: &ModelKit, team: Team, kind: UnitKind, pos: Vec3) -> Entity {
+    let (hp, speed, radius, weapon) = match kind {
+        UnitKind::Sammler => (160.0, 7.0, 1.3, None),
         UnitKind::Panzer => (
-            a.panzer.clone(),
             220.0,
             6.0,
-            1.3,
-            Some(Weapon { range: 11.0, damage: 18.0, cooldown: 1.1, timer: 0.0, projectile_speed: 30.0 }),
-            0.4,
+            1.4,
+            Some(Weapon { range: 11.0, damage: 18.0, cooldown: 1.1, timer: 0.0, projectile_speed: 38.0, rocket: false }),
         ),
         UnitKind::Werfer => (
-            a.werfer.clone(),
             140.0,
             4.8,
-            1.2,
-            Some(Weapon { range: 19.0, damage: 34.0, cooldown: 2.4, timer: 0.0, projectile_speed: 18.0 }),
-            0.7,
+            1.3,
+            Some(Weapon { range: 19.0, damage: 34.0, cooldown: 2.4, timer: 0.0, projectile_speed: 20.0, rocket: true }),
         ),
     };
     let facing = if team == PLAYER { Vec3::new(1.0, 0.0, -1.0) } else { Vec3::new(-1.0, 0.0, 1.0) };
+    let heading = Heading::from_dir(facing);
     let mut e = commands.spawn((
-        Mesh3d(mesh),
-        MeshMaterial3d(a.team_mat[t].clone()),
-        Transform::from_translation(flat(pos) + Vec3::Y * y).looking_to(facing, Vec3::Y),
+        Transform::from_translation(terrain::on_ground(pos)).with_rotation(Quat::from_rotation_y(heading.0)),
+        Visibility::default(),
         team,
         Health { hp, max: hp },
         Unit { kind, speed, radius },
+        heading,
     ));
     if let Some(w) = weapon {
         e.insert(w);
@@ -245,19 +175,8 @@ pub fn spawn_unit(commands: &mut Commands, a: &Assets3d, team: Team, kind: UnitK
         });
     }
     let id = e.id();
-    // Aufbau (Turm / Ladefläche) in Akzentfarbe
-    let top_y = match kind {
-        UnitKind::Sammler => 0.7,
-        UnitKind::Panzer => 0.6,
-        UnitKind::Werfer => 0.9,
-    };
-    let child = commands
-        .spawn((
-            Mesh3d(a.turret.clone()),
-            MeshMaterial3d(a.accent_mat[t].clone()),
-            Transform::from_xyz(0.0, top_y, -0.3),
-        ))
-        .id();
-    commands.entity(id).add_child(child);
+    if let Some(turret) = models::build_unit(commands, kit, id, team, kind) {
+        commands.entity(id).insert(TurretRef(turret));
+    }
     id
 }

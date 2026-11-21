@@ -1,9 +1,16 @@
 use crate::components::*;
+use crate::fx::FxEvent;
+use crate::models::ModelKit;
+use crate::terrain;
+use crate::world::spawn_unit;
+use bevy::light::NotShadowCaster;
 use bevy::platform::collections::HashMap;
 use bevy::prelude::*;
+use std::f32::consts::{PI, TAU};
 
 #[derive(Clone, Copy)]
 pub struct Snap {
+    /// Position am Boden (inkl. Geländehöhe)
     pub pos: Vec3,
     pub team: Team,
     pub radius: f32,
@@ -14,6 +21,15 @@ pub struct Snap {
 #[derive(Resource, Default)]
 pub struct Snapshot(pub HashMap<Entity, Snap>);
 
+fn dist2d(a: Vec3, b: Vec3) -> f32 {
+    flat(a).distance(flat(b))
+}
+
+/// Winkel b - a im Bereich [-PI, PI]
+fn angle_diff(a: f32, b: f32) -> f32 {
+    (b - a + PI).rem_euclid(TAU) - PI
+}
+
 pub fn snapshot(
     mut snap: ResMut<Snapshot>,
     q: Query<(Entity, &Transform, &Team, Option<&Unit>, Option<&Building>), With<Health>>,
@@ -23,7 +39,7 @@ pub fn snapshot(
         snap.0.insert(
             e,
             Snap {
-                pos: flat(t.translation),
+                pos: t.translation,
                 team: *team,
                 radius: u.map(|u| u.radius).or(b.map(|b| b.radius)).unwrap_or(1.0),
                 is_building: b.is_some(),
@@ -50,7 +66,7 @@ pub fn auto_target(
                 continue;
             }
             // Einheiten vor Gebäuden bevorzugen
-            let d = me.pos.distance(o.pos) - o.radius + if o.is_building { 4.0 } else { 0.0 };
+            let d = dist2d(me.pos, o.pos) - o.radius + if o.is_building { 4.0 } else { 0.0 };
             if d < sight && best.is_none_or(|(_, bd)| d < bd) {
                 best = Some((*oe, d));
             }
@@ -61,42 +77,61 @@ pub fn auto_target(
     }
 }
 
+/// Zielhöhe für Geschosse (Mitte des Ziels)
+fn aim_point(s: &Snap) -> Vec3 {
+    s.pos + Vec3::Y * if s.is_building { 2.2 } else { 0.8 }
+}
+
 pub fn combat(
     mut commands: Commands,
     time: Res<Time>,
     snap: Res<Snapshot>,
-    assets: Res<Assets3d>,
-    mut q: Query<(Entity, &mut Weapon, &AttackTarget, &Team, &mut Transform)>,
+    kit: Res<ModelKit>,
+    mut fx: MessageWriter<FxEvent>,
+    mut q: Query<(Entity, &mut Weapon, &AttackTarget, &Team, &Transform, &Unit)>,
 ) {
     let dt = time.delta_secs();
-    for (e, mut w, target, team, mut t) in &mut q {
+    for (e, mut w, target, team, t, unit) in &mut q {
         w.timer = (w.timer - dt).max(0.0);
         let Some(tgt) = snap.0.get(&target.0) else {
             commands.entity(e).remove::<AttackTarget>();
             continue;
         };
-        let me = flat(t.translation);
-        let to = tgt.pos - me;
+        let to = flat(tgt.pos - t.translation);
         let dist = to.length() - tgt.radius;
-        if dist <= w.range {
-            if to.length_squared() > 0.01 {
-                let look = me + to;
-                let y = t.translation.y;
-                t.look_at(Vec3::new(look.x, y, look.z), Vec3::Y);
-            }
-            if w.timer <= 0.0 {
-                w.timer = w.cooldown;
-                commands.spawn((
-                    Mesh3d(assets.projectile.clone()),
-                    MeshMaterial3d(assets.projectile_mat[team.0 as usize].clone()),
-                    Transform::from_translation(t.translation + Vec3::Y * 0.8),
-                    Projectile {
-                        target: target.0,
-                        damage: w.damage,
-                        speed: w.projectile_speed,
-                    },
-                ));
-            }
+        if dist > w.range || w.timer > 0.0 {
+            continue;
+        }
+        w.timer = w.cooldown;
+        let dir = to.normalize_or_zero();
+        let (muzzle_len, muzzle_h) = if unit.kind == UnitKind::Werfer { (1.0, 1.5) } else { (2.2, 1.05) };
+        let from = t.translation + Vec3::Y * muzzle_h + dir * muzzle_len;
+        let vel = (aim_point(tgt) - from).normalize_or_zero();
+        let t_idx = team.0 as usize;
+        let (mat, scale) = if w.rocket {
+            (kit.rocket_mat[t_idx].clone(), Vec3::new(2.4, 0.8, 2.4))
+        } else {
+            (kit.tracer_mat[t_idx].clone(), Vec3::ONE)
+        };
+        commands.spawn((
+            Mesh3d(kit.tracer.clone()),
+            MeshMaterial3d(mat),
+            Transform::from_translation(from)
+                .with_rotation(Quat::from_rotation_arc(Vec3::Y, vel))
+                .with_scale(scale),
+            NotShadowCaster,
+            Projectile {
+                target: target.0,
+                damage: w.damage,
+                speed: w.projectile_speed,
+                rocket: w.rocket,
+                smoke_timer: 0.0,
+            },
+        ));
+        if !w.rocket {
+            fx.write(FxEvent::Muzzle(from));
+        } else {
+            fx.write(FxEvent::Puff { pos: from, dark: false });
         }
     }
 }
@@ -105,18 +140,26 @@ pub fn movement(
     mut commands: Commands,
     time: Res<Time>,
     snap: Res<Snapshot>,
-    mut q: Query<(Entity, &Unit, &mut Transform, Option<&MoveTo>, Option<&AttackTarget>, Option<&Weapon>)>,
+    mut q: Query<(
+        Entity,
+        &Unit,
+        &mut Transform,
+        &mut Heading,
+        Option<&MoveTo>,
+        Option<&AttackTarget>,
+        Option<&Weapon>,
+    )>,
 ) {
     let dt = time.delta_secs();
-    for (e, unit, mut t, mv, atk, w) in &mut q {
+    for (e, unit, mut t, mut heading, mv, atk, w) in &mut q {
         let me = flat(t.translation);
         let mut goal: Option<(Vec3, f32)> = None;
         let mut engaged = false;
         if let (Some(a), Some(w)) = (atk, w)
             && let Some(tgt) = snap.0.get(&a.0) {
                 engaged = true;
-                if me.distance(tgt.pos) - tgt.radius > w.range * 0.95 {
-                    goal = Some((tgt.pos, 0.0));
+                if dist2d(me, tgt.pos) - tgt.radius > w.range * 0.95 {
+                    goal = Some((flat(tgt.pos), 0.0));
                 }
             }
         if !engaged
@@ -130,21 +173,19 @@ pub fn movement(
             commands.entity(e).remove::<MoveTo>().remove::<AttackMove>();
             continue;
         }
-        let step = (unit.speed * dt).min(d);
         let dir = to / d;
+        // erst drehen, dann fahren: Kettenfahrzeuge wenden auf der Stelle
+        let want = Heading::from_dir(dir).0;
+        let diff = angle_diff(heading.0, want);
+        heading.0 += diff.clamp(-3.2 * dt, 3.2 * dt);
+        let align = (1.0 - diff.abs() / 1.2).clamp(0.15, 1.0);
+        let step = (unit.speed * align * dt).min(d);
         t.translation += dir * step;
-        let target_rot = Transform::from_translation(t.translation)
-            .looking_to(dir, Vec3::Y)
-            .rotation;
-        t.rotation = t.rotation.slerp(target_rot, (8.0 * dt).min(1.0));
     }
 }
 
 /// Einheiten schieben sich auseinander und bleiben außerhalb von Gebäuden
-pub fn separation(
-    snap: Res<Snapshot>,
-    mut q: Query<(Entity, &Unit, &mut Transform)>,
-) {
+pub fn separation(snap: Res<Snapshot>, mut q: Query<(Entity, &Unit, &mut Transform)>) {
     let list: Vec<(Entity, Snap)> = snap.0.iter().map(|(e, s)| (*e, *s)).collect();
     for (e, unit, mut t) in &mut q {
         let me = flat(t.translation);
@@ -154,7 +195,7 @@ pub fn separation(
                 continue;
             }
             let min = unit.radius + o.radius;
-            let diff = me - o.pos;
+            let diff = me - flat(o.pos);
             let d = diff.length();
             if d < min && d > 0.001 {
                 let strength = if o.is_building { 1.0 } else { 0.5 };
@@ -166,6 +207,42 @@ pub fn separation(
         t.translation += push.clamp_length_max(0.5);
         t.translation.x = t.translation.x.clamp(-MAP_HALF, MAP_HALF);
         t.translation.z = t.translation.z.clamp(-MAP_HALF, MAP_HALF);
+    }
+}
+
+/// Fahrzeuge folgen dem Gelände: Höhe und Neigung
+pub fn ground_snap(time: Res<Time>, mut q: Query<(&mut Transform, &Heading), With<Unit>>) {
+    let k = (10.0 * time.delta_secs()).min(1.0);
+    for (mut t, heading) in &mut q {
+        let (x, z) = (t.translation.x, t.translation.z);
+        t.translation.y = terrain::height(x, z);
+        let n = terrain::normal(x, z);
+        let target = Quat::from_rotation_arc(Vec3::Y, n) * Quat::from_rotation_y(heading.0);
+        t.rotation = t.rotation.slerp(target, k);
+    }
+}
+
+/// Türme drehen sich zum Ziel, sonst zurück nach vorne
+pub fn turret_aim(
+    time: Res<Time>,
+    snap: Res<Snapshot>,
+    units: Query<(&Transform, &Heading, &TurretRef, Option<&AttackTarget>), With<Unit>>,
+    mut turrets: Query<(&mut Transform, &Turret), Without<Unit>>,
+) {
+    let dt = time.delta_secs();
+    for (t, heading, tref, atk) in &units {
+        let Ok((mut tt, turret)) = turrets.get_mut(tref.0) else { continue };
+        let mut local = 0.0;
+        if let Some(tgt) = atk.and_then(|a| snap.0.get(&a.0)) {
+            let to = flat(tgt.pos - t.translation);
+            if to.length_squared() > 0.01 {
+                local = angle_diff(heading.0, Heading::from_dir(to).0);
+            }
+        }
+        let (cur, _, _) = tt.rotation.to_euler(EulerRot::YXZ);
+        let next = cur + angle_diff(cur, local).clamp(-2.5 * dt, 2.5 * dt);
+        tt.rotation = Quat::from_euler(EulerRot::YXZ, next, turret.tilt, 0.0);
+        tt.translation = Vec3::new(0.0, turret.base_y, turret.base_z);
     }
 }
 
@@ -225,7 +302,7 @@ pub fn harvest(
                     continue;
                 }
                 let np = flat(nt.translation);
-                if me.distance(np) < 3.2 {
+                if me.distance(np) < 3.4 {
                     commands.entity(e).remove::<MoveTo>();
                     h.state = HarvestState::Mining(0.0);
                 } else {
@@ -254,7 +331,7 @@ pub fn harvest(
                 h.state = HarvestState::Returning;
             }
             HarvestState::Returning => {
-                if me.distance(hq) < 6.0 {
+                if me.distance(flat(hq)) < 6.6 {
                     stock.0[team.0 as usize][h.cargo_kind.idx()] += h.cargo;
                     h.cargo = 0;
                     commands.entity(e).remove::<MoveTo>();
@@ -271,36 +348,49 @@ pub fn projectiles(
     mut commands: Commands,
     time: Res<Time>,
     snap: Res<Snapshot>,
-    mut q: Query<(Entity, &mut Transform, &Projectile)>,
+    mut fx: MessageWriter<FxEvent>,
+    mut q: Query<(Entity, &mut Transform, &mut Projectile)>,
     mut health: Query<&mut Health>,
 ) {
     let dt = time.delta_secs();
-    for (e, mut t, p) in &mut q {
+    for (e, mut t, mut p) in &mut q {
         let Some(tgt) = snap.0.get(&p.target) else {
             commands.entity(e).try_despawn();
             continue;
         };
-        let aim = tgt.pos + Vec3::Y * if tgt.is_building { 2.0 } else { 0.6 };
+        let aim = aim_point(tgt);
         let to = aim - t.translation;
         let d = to.length();
         let step = p.speed * dt;
-        if d <= step + tgt.radius * 0.5 {
+        if d <= step + tgt.radius * 0.4 {
             if let Ok(mut h) = health.get_mut(p.target) {
                 h.hp -= p.damage;
             }
+            fx.write(FxEvent::Impact { pos: t.translation, rocket: p.rocket });
             commands.entity(e).try_despawn();
-        } else {
-            t.translation += to / d * step;
+            continue;
+        }
+        let dir = to / d;
+        t.translation += dir * step;
+        t.rotation = Quat::from_rotation_arc(Vec3::Y, dir);
+        if p.rocket {
+            p.smoke_timer -= dt;
+            if p.smoke_timer <= 0.0 {
+                p.smoke_timer = 0.05;
+                fx.write(FxEvent::Puff { pos: t.translation - dir * 0.6, dark: false });
+            }
         }
     }
 }
 
 pub fn deaths(
     mut commands: Commands,
-    q: Query<(Entity, &Health)>,
+    mut fx: MessageWriter<FxEvent>,
+    q: Query<(Entity, &Health, &Transform, Has<Building>)>,
 ) {
-    for (e, h) in &q {
+    for (e, h, t, building) in &q {
         if h.hp <= 0.0 {
+            fx.write(FxEvent::Death { pos: t.translation, big: building });
             commands.entity(e).try_despawn();
         }
     }
@@ -350,7 +440,7 @@ pub fn enqueue_builds(
 pub fn production(
     mut commands: Commands,
     time: Res<Time>,
-    assets: Res<Assets3d>,
+    kit: Res<ModelKit>,
     mut hqs: Query<(&Team, &mut Hq, &Transform)>,
 ) {
     for (team, mut hq, t) in &mut hqs {
@@ -362,14 +452,12 @@ pub fn production(
         if hq.progress >= kind.build_time() {
             hq.progress = 0.0;
             hq.queue.remove(0);
-            let dir = if *team == PLAYER { Vec3::new(1.0, 0.0, -1.0) } else { Vec3::new(-1.0, 0.0, 1.0) };
-            let spawn = flat(t.translation) + dir * 5.5;
-            let e = spawn_unit(&mut commands, &assets, *team, kind, spawn);
+            let dir = if *team == PLAYER { Vec3::new(1.0, 0.0, -1.0) } else { Vec3::new(-1.0, 0.0, 1.0) }.normalize();
+            let spawn = flat(t.translation) + dir * 7.0;
+            let e = spawn_unit(&mut commands, &kit, *team, kind, spawn);
             if kind != UnitKind::Sammler {
                 commands.entity(e).insert(MoveTo(spawn + dir * 6.0));
             }
         }
     }
 }
-
-use crate::world::spawn_unit;

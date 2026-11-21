@@ -1,6 +1,10 @@
 use crate::components::*;
 use crate::hud::{BOTTOM_PANEL_H, TOP_BAR_H};
+use crate::terrain;
+use bevy::core_pipeline::tonemapping::Tonemapping;
 use bevy::input::mouse::{MouseScrollUnit, MouseWheel};
+use bevy::light::{CascadeShadowConfig, CascadeShadowConfigBuilder};
+use bevy::post_process::bloom::Bloom;
 use bevy::prelude::*;
 use bevy::window::PrimaryWindow;
 
@@ -33,12 +37,45 @@ pub struct DragState {
 #[derive(Component)]
 pub struct SelectionBox;
 
+/// Dunst-Farbe am Horizont (auch Hintergrundfarbe)
+pub const HAZE: Color = Color::srgb(0.66, 0.64, 0.60);
+
 pub fn setup_camera(mut commands: Commands) {
-    commands.spawn((Camera3d::default(), MainCamera, Transform::default()));
+    commands.spawn((
+        Camera3d::default(),
+        MainCamera,
+        Transform::default(),
+        Tonemapping::TonyMcMapface,
+        Bloom { intensity: 0.12, ..Bloom::NATURAL },
+        DistanceFog {
+            color: HAZE,
+            directional_light_color: Color::srgba(1.0, 0.85, 0.65, 0.35),
+            directional_light_exponent: 24.0,
+            falloff: FogFalloff::Linear { start: 90.0, end: 280.0 },
+        },
+    ));
+}
+
+/// Schattenbereich an den Zoom anpassen: nah = scharfe Schatten, weit = alles im Schatten
+pub fn update_shadows(rig: Res<CamRig>, mut q: Query<&mut CascadeShadowConfig>) {
+    if !rig.is_changed() {
+        return;
+    }
+    let max = rig.dist * 2.4 + 20.0;
+    for mut c in &mut q {
+        *c = CascadeShadowConfigBuilder {
+            num_cascades: 1,
+            minimum_distance: 1.0,
+            maximum_distance: max,
+            first_cascade_far_bound: max,
+            ..default()
+        }
+        .build();
+    }
 }
 
 fn cam_offset(rig: &CamRig) -> Vec3 {
-    let pitch = 55f32.to_radians();
+    let pitch = (42.0 + rig.dist * 0.18).min(62.0).to_radians();
     let horiz = rig.dist * pitch.cos();
     Vec3::new(horiz * rig.yaw.sin(), rig.dist * pitch.sin(), horiz * rig.yaw.cos())
 }
@@ -106,25 +143,28 @@ pub fn camera_control(
         let delta = (right * d.x + fwd * d.y) * speed * dt;
         let lim = MAP_HALF - 15.0;
         rig.focus = (rig.focus + delta).clamp(Vec3::splat(-lim), Vec3::splat(lim));
-        rig.focus.y = 0.0;
     }
+    // Blickpunkt sanft der Geländehöhe nachführen
+    let ground = terrain::height(rig.focus.x, rig.focus.z);
+    rig.focus.y += (ground - rig.focus.y) * (6.0 * dt).min(1.0);
     if let Ok(mut t) = cam.single_mut() {
         *t = Transform::from_translation(rig.focus + cam_offset(&rig)).looking_at(rig.focus, Vec3::Y);
     }
 }
 
-/// Bildschirmpunkt -> Bodenpunkt (y = 0)
+/// Bildschirmpunkt -> Punkt auf dem Gelände (Strahl schrittweise auf die Höhe angenähert)
 pub fn ground_point(cam: &Camera, cam_t: &GlobalTransform, screen: Vec2) -> Option<Vec3> {
     let ray = cam.viewport_to_world(cam_t, screen).ok()?;
     let d = *ray.direction;
-    if d.y.abs() < 1e-4 {
+    if d.y > -1e-3 {
         return None;
     }
-    let t = -ray.origin.y / d.y;
-    if t < 0.0 {
-        return None;
+    let mut t = -ray.origin.y / d.y;
+    for _ in 0..8 {
+        let p = ray.origin + d * t;
+        t = (terrain::height(p.x, p.z) - ray.origin.y) / d.y;
     }
-    Some(ray.origin + d * t)
+    (t > 0.0).then(|| ray.origin + d * t)
 }
 
 /// Wählt das Objekt, dessen Bildschirmposition dem Cursor am nächsten liegt.
@@ -138,7 +178,7 @@ fn pick(
     let right = cam_t.right().as_vec3();
     let mut best: Option<(Entity, f32)> = None;
     for (e, pos, radius) in cands {
-        let base = flat(pos) + Vec3::Y * 0.6;
+        let base = pos + Vec3::Y * 0.7;
         let (Ok(center), Ok(edge)) = (
             cam.world_to_viewport(cam_t, base),
             cam.world_to_viewport(cam_t, base + right * radius),
@@ -264,14 +304,14 @@ pub fn mouse_commands(
         c,
         targets.iter().filter(|(_, _, t, _, _)| **t != PLAYER).map(|(e, gt, _, u, b)| {
             let r = u.map(|u| u.radius).or(b.map(|b| b.radius)).unwrap_or(1.0);
-            (e, flat(gt.translation()), r)
+            (e, gt.translation(), r)
         }),
     )
     .map(|e| (e, 0.0));
     // Ressourcenfeld unter dem Cursor?
     let mut node: Option<Entity> = None;
     for (e, gt) in &nodes {
-        if flat(gt.translation()).distance(gp) < 3.0 {
+        if flat(gt.translation()).distance(flat(gp)) < 3.5 {
             node = Some(e);
         }
     }
@@ -323,18 +363,18 @@ pub fn draw_overlays(
     let Ok(cam_t) = cam.single() else { return };
     let right = cam_t.right().with_y(0.0).normalize_or_zero();
     for (gt, hp, team, unit, bld, sel) in &units {
-        let pos = flat(gt.translation());
+        let pos = gt.translation();
         let r = unit.map(|u| u.radius).or(bld.map(|b| b.radius)).unwrap_or(1.0);
         if sel {
             gizmos.circle(
-                Isometry3d::new(pos + Vec3::Y * 0.05, Quat::from_rotation_x(std::f32::consts::FRAC_PI_2)),
+                Isometry3d::new(pos + Vec3::Y * 0.15, Quat::from_rotation_x(std::f32::consts::FRAC_PI_2)),
                 r + 0.3,
                 Color::srgb(0.4, 1.0, 0.5),
             );
         }
         let frac = (hp.hp / hp.max).clamp(0.0, 1.0);
         if sel || frac < 0.999 {
-            let height = if bld.is_some() { 6.5 } else { 2.4 };
+            let height = if bld.is_some() { 8.2 } else { 2.6 };
             let w = r * 1.6;
             let start = pos + Vec3::Y * height - right * w * 0.5;
             let col = if *team == PLAYER {

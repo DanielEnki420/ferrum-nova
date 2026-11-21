@@ -55,6 +55,11 @@ cd web && npx astro preview
 - Drei Einheiten: Sammler, Panzer, Raketenwerfer. Gebaut werden sie im HQ über die Tasten 1–3 oder die Knöpfe.
 - Gegner-KI (Vaar-Schwarm): baut eine Wirtschaft auf und greift ab etwa 2,5 Minuten in immer größeren Wellen an.
 - Sieg: feindliches HQ zerstört. Niederlage: eigenes HQ verloren.
+- Grafik (alles im Code erzeugt, ohne Bilddateien):
+  - **Gelände:** Relief mit Bergen am Kartenrand, kachelbare Detailtextur und Normal-Map mit Mipmaps.
+  - **Modelle:** Fahrzeuge mit Ketten, Laufrollen und drehbaren Türmen, ein detailliertes HQ, Kristalle und Plasmaquellen.
+  - **Licht:** HDR, Bloom, Dunst und Schatten, die sich an den Zoom anpassen.
+  - **Effekte:** Mündungsfeuer, Raketen-Rauchspuren, Explosionen mit Lichtblitz, Brandspuren und Qualm bei beschädigten Fahrzeugen.
 - Steuerung: Linksklick oder Ziehen wählt aus, F wählt alle Kampfeinheiten. Rechtsklick bewegt, greift an oder baut ab. Strg+Rechtsklick ist ein Angriffsmarsch. WASD/Pfeile/Bildschirmrand bewegen die Kamera, Q/E drehen sie, das Mausrad zoomt.
 
 ## Mögliche nächste Schritte
