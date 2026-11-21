@@ -120,6 +120,15 @@ pub fn find_spot(kind: BuildingKind, target: Vec3, team: Team, sites: &[Site], n
 
 /// Neues Gebäude im Bau anlegen
 pub fn spawn_structure(c: &mut Commands, kit: &ModelKit, team: Team, kind: BuildingKind, pos: Vec3, rot: Option<Quat>) -> Entity {
+    structure(c, kit, team, kind, pos, rot, false)
+}
+
+/// Fertiges Gebäude ohne Bauphase (vorgebaute Stellungen in Missionen)
+pub fn spawn_finished_structure(c: &mut Commands, kit: &ModelKit, team: Team, kind: BuildingKind, pos: Vec3, rot: Option<Quat>) -> Entity {
+    structure(c, kit, team, kind, pos, rot, true)
+}
+
+fn structure(c: &mut Commands, kit: &ModelKit, team: Team, kind: BuildingKind, pos: Vec3, rot: Option<Quat>, finished: bool) -> Entity {
     let ground = terrain::on_ground(pos);
     let depth = kit.structures[kind.idx()][team.0 as usize].height;
     let tf = Transform::from_translation(ground).looking_to(-facing(team), Vec3::Y);
@@ -128,13 +137,15 @@ pub fn spawn_structure(c: &mut Commands, kit: &ModelKit, team: Team, kind: Build
             rot.map_or(tf, |r| tf.with_rotation(r)),
             Visibility::default(),
             team,
-            Health { hp: kind.hp() * 0.1, max: kind.hp() },
+            Health { hp: if finished { kind.hp() } else { kind.hp() * 0.1 }, max: kind.hp() },
             Building { radius: kind.radius() },
             Structure(kind),
-            Construction { progress: 0.0, dust: 0.0 },
         ))
         .id();
-    let pivot = c.spawn((Transform::from_xyz(0.0, -depth, 0.0), Visibility::default())).id();
+    if !finished {
+        c.entity(root).insert(Construction { progress: 0.0, dust: 0.0 });
+    }
+    let pivot = c.spawn((Transform::from_xyz(0.0, if finished { 0.0 } else { -depth }, 0.0), Visibility::default())).id();
     c.entity(root).add_child(pivot).insert(RisePivot { entity: pivot, depth });
     if let Some(head) = models::build_structure(c, kit, pivot, team, kind, None) {
         c.entity(root).insert(TurretRef(head));
@@ -380,10 +391,14 @@ pub fn place_buildings(
     walls: Query<(Entity, &Transform, &Team, &Structure)>,
     nodes: Query<&Transform, With<ResourceNode>>,
     mut fx: MessageWriter<FxEvent>,
+    unlocks: Option<Res<crate::campaign::Unlocks>>,
 ) {
     let mut site_list = collect_sites(&sites);
     let node_list: Vec<Vec3> = nodes.iter().map(|t| t.translation).collect();
     for r in reqs.read() {
+        if unlocks.as_ref().is_some_and(|u| !u.building(r.team, r.kind)) {
+            continue;
+        }
         if !stock.can_afford(r.team, r.kind.cost()) || !can_place(r.kind, r.pos, r.team, &site_list, &node_list) {
             continue;
         }

@@ -156,7 +156,7 @@ fn pitch(dist: f32) -> f32 {
     (42.0 + dist * 0.18).min(62.0).to_radians()
 }
 
-fn cam_offset(rig: &CamRig) -> Vec3 {
+pub fn cam_offset(rig: &CamRig) -> Vec3 {
     let p = pitch(rig.dist);
     let horiz = rig.dist * p.cos();
     Vec3::new(horiz * rig.yaw.sin(), rig.dist * p.sin(), horiz * rig.yaw.cos())
@@ -364,7 +364,7 @@ pub fn mouse_commands(
     outcome: Res<Outcome>,
     units: Query<(Entity, &GlobalTransform, &Team, &Unit, Has<Selected>, Has<Weapon>, Has<Harvester>)>,
     buildings: Query<(Entity, &GlobalTransform, &Team, &Building, Has<Hq>, Has<Selected>), (Without<Unit>, Without<Construction>)>,
-    targets: Query<(Entity, &GlobalTransform, &Team, Option<&Unit>, Option<&Building>), With<Health>>,
+    targets: Query<(Entity, &GlobalTransform, &Team, Option<&Unit>, Option<&Building>), (With<Health>, Without<Fogged>)>,
     nodes: Query<(Entity, &GlobalTransform), With<ResourceNode>>,
     mut harvesters: Query<&mut Harvester>,
     (mut sel_box, panel): (Query<(&mut Node, &mut Visibility), With<SelectionBox>>, Query<&RelativeCursorPosition, With<SelCard>>),
@@ -745,7 +745,7 @@ pub fn hover(
     mut hover: ResMut<Hover>,
     window: Query<(Entity, &Window), With<PrimaryWindow>>,
     cam: Query<(&Camera, &GlobalTransform), With<MainCamera>>,
-    targets: Query<(Entity, &GlobalTransform, &Team, Option<&Unit>, Option<&Building>), With<Health>>,
+    targets: Query<(Entity, &GlobalTransform, &Team, Option<&Unit>, Option<&Building>), (With<Health>, Without<Fogged>)>,
     nodes: Query<(Entity, &GlobalTransform), With<ResourceNode>>,
     selected: Query<(&Team, Has<Weapon>, Has<Harvester>), (With<Selected>, With<Unit>)>,
     drag: Res<DragState>,
@@ -800,7 +800,7 @@ fn ring(gizmos: &mut Gizmos, pos: Vec3, r: f32, col: Color) {
 pub fn draw_overlays(
     mut gizmos: Gizmos,
     hover: Res<Hover>,
-    units: Query<(Entity, &GlobalTransform, &Health, &Team, Option<&Unit>, Option<&Building>, Has<Selected>, Has<HoldPosition>)>,
+    units: Query<(Entity, &GlobalTransform, &Health, &Team, Option<&Unit>, Option<&Building>, Has<Selected>, Has<HoldPosition>), Without<Fogged>>,
     nodes: Query<&GlobalTransform, With<ResourceNode>>,
     cam: Query<&GlobalTransform, With<MainCamera>>,
 ) {

@@ -31,6 +31,10 @@ pub struct TerrainExt {
     pub normal: Handle<Image>,
     #[texture(104, dimension = "2d_array")]
     pub arm: Handle<Image>,
+    /// Nebel des Krieges (fog.rs)
+    #[texture(105)]
+    #[sampler(106)]
+    pub fog: Handle<Image>,
 }
 
 impl MaterialExtension for TerrainExt {
@@ -116,6 +120,7 @@ pub fn finish_terrain(
         albedo: images.add(array_image(&color, TextureFormat::Rgba8UnormSrgb)),
         normal: images.add(array_image(&normal, TextureFormat::Rgba8Unorm)),
         arm: images.add(array_image(&arm, TextureFormat::Rgba8Unorm)),
+        fog: crate::fog::FOG_TEXTURE,
     };
     let mat = terrain_mats.add(ExtendedMaterial {
         base: StandardMaterial { perceptual_roughness: 0.9, reflectance: 0.3, ..default() },

@@ -22,11 +22,24 @@ pub struct WindExt {
     /// x: Stärke, y: Tempo, z: Flattern, w: frei
     #[uniform(100)]
     pub params: Vec4,
+    /// Nebel des Krieges (fog.rs)
+    #[texture(101)]
+    #[sampler(102)]
+    pub fog: Handle<Image>,
+}
+
+impl WindExt {
+    pub fn new(params: Vec4) -> Self {
+        Self { params, fog: crate::fog::FOG_TEXTURE }
+    }
 }
 
 impl MaterialExtension for WindExt {
     fn vertex_shader() -> ShaderRef {
         "shaders/wind.wesl".into()
+    }
+    fn fragment_shader() -> ShaderRef {
+        "shaders/wind_fragment.wesl".into()
     }
 }
 
@@ -286,11 +299,11 @@ pub fn setup_vegetation(
             cull_mode: None,
             ..default()
         },
-        extension: WindExt { params: Vec4::new(0.22, 1.0, 0.25, 0.0) },
+        extension: WindExt::new(Vec4::new(0.22, 1.0, 0.25, 0.0)),
     });
     let plant_mat = mats.add(ExtendedMaterial {
         base: StandardMaterial { perceptual_roughness: 0.9, reflectance: 0.2, ..default() },
-        extension: WindExt { params: Vec4::new(0.12, 0.8, 0.1, 0.0) },
+        extension: WindExt::new(Vec4::new(0.12, 0.8, 0.1, 0.0)),
     });
     for m in grass.into_iter().filter_map(Batch::into_mesh) {
         commands.spawn((Mesh3d(meshes.add(m)), MeshMaterial3d(grass_mat.clone()), NotShadowCaster));

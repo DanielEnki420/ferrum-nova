@@ -11,6 +11,7 @@ pub fn setup_world(
     mut meshes: ResMut<Assets<Mesh>>,
     mut mats: ResMut<Assets<StandardMaterial>>,
     mut images: ResMut<Assets<Image>>,
+    mut wind_mats: ResMut<Assets<crate::vegetation::WindMaterial>>,
 ) {
     let kit = ModelKit::new(&mut meshes, &mut mats);
     commands.insert_resource(FxKit::new(&mut meshes, &mut mats, &mut images));
@@ -51,7 +52,11 @@ pub fn setup_world(
         LinearRgba::from(Color::srgb(0.27, 0.25, 0.23)),
         LinearRgba::from(Color::srgb(0.42, 0.37, 0.30)),
     ];
-    let rock_mat = mats.add(StandardMaterial { perceptual_roughness: 0.93, ..default() });
+    // Wind-Material ohne Wind: so bekommen auch die Felsen Wolkenschatten und Nebel des Krieges
+    let rock_mat = wind_mats.add(bevy::pbr::ExtendedMaterial {
+        base: StandardMaterial { perceptual_roughness: 0.93, ..default() },
+        extension: crate::vegetation::WindExt::new(Vec4::ZERO),
+    });
     const CHUNKS: usize = 5;
     let chunk_of = |p: Vec3| {
         let f = |v: f32| (((v + terrain::TERRAIN_HALF) / (2.0 * terrain::TERRAIN_HALF) * CHUNKS as f32) as usize).min(CHUNKS - 1);

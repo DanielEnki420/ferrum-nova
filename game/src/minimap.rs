@@ -144,9 +144,10 @@ pub fn update_minimap(
     alerts: Res<Alerts>,
     window: Query<&Window, With<PrimaryWindow>>,
     cam: Query<(&Camera, &GlobalTransform), With<MainCamera>>,
-    units: Query<(&Transform, &Team, Has<Selected>), With<Unit>>,
-    buildings: Query<(&Transform, &Team, &Building, Has<Selected>)>,
+    units: Query<(&Transform, &Team, Has<Selected>), (With<Unit>, Without<Fogged>)>,
+    buildings: Query<(&Transform, &Team, &Building, Has<Selected>), Without<Fogged>>,
     nodes: Query<(&Transform, &ResourceNode)>,
+    fog: Option<Res<crate::fog::FogGrid>>,
 ) {
     mm.timer -= time.delta_secs();
     if mm.timer > 0.0 {
@@ -154,6 +155,19 @@ pub fn update_minimap(
     }
     mm.timer = 0.2;
     let mut data = mm.base.clone();
+    // Nebel des Krieges: Unerkundetes fast schwarz, Erkundetes gedämpft
+    if let Some(fog) = &fog {
+        for y in 0..RES {
+            for x in 0..RES {
+                let p = Vec3::new(((x as f32 + 0.5) / RES as f32 * 2.0 - 1.0) * MAP_HALF, 0.0, ((y as f32 + 0.5) / RES as f32 * 2.0 - 1.0) * MAP_HALF);
+                let k = 0.12 + 0.88 * fog.shade(p);
+                let i = (y * RES + x) * 4;
+                for c in &mut data[i..i + 3] {
+                    *c = (*c as f32 * k) as u8;
+                }
+            }
+        }
+    }
     for (t, n) in &nodes {
         if n.amount == 0 {
             continue;

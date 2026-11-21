@@ -60,6 +60,7 @@ pub fn auto_target(
     mut commands: Commands,
     snap: Res<Snapshot>,
     q: Query<(Entity, &Weapon, &Team, Has<MoveTo>, Has<AttackMove>, Has<HoldPosition>), (Without<AttackTarget>, Without<Construction>)>,
+    fog: Option<Res<crate::fog::FogGrid>>,
 ) {
     for (e, w, team, moving, amove, hold) in &q {
         if moving && !amove {
@@ -71,6 +72,10 @@ pub fn auto_target(
         let mut best: Option<(Entity, f32)> = None;
         for (oe, o) in &snap.0 {
             if o.team == *team || o.wall {
+                continue;
+            }
+            // Der Spieler schießt nur auf das, was er sieht (Artillerie braucht Aufklärung)
+            if *team == PLAYER && fog.as_ref().is_some_and(|f| !f.visible(o.pos)) {
                 continue;
             }
             // Einheiten vor Gebäuden bevorzugen
@@ -361,8 +366,11 @@ pub fn harvest(
     mut harvesters: Query<(Entity, &mut Harvester, &Transform, &Team, Has<MoveTo>), Without<ResourceNode>>,
     mut nodes: Query<(Entity, &Transform, &mut ResourceNode)>,
     depots: Query<(&Transform, &Team, &Building), (With<Depot>, Without<Construction>)>,
+    (cfg, mut stats): (Option<Res<crate::frame::MatchConfig>>, Option<ResMut<crate::frame::Stats>>),
 ) {
     let dt = time.delta_secs();
+    // Schwierigkeit: die Gegner-KI bekommt mehr oder weniger je Ladung
+    let ai_income = cfg.map_or(1.0, |c| c.ai_income());
     for (e, mut h, t, team, moving) in &mut harvesters {
         let me = flat(t.translation);
         // Nächste eigene Abladestelle (HQ oder Raffinerie)
@@ -447,7 +455,11 @@ pub fn harvest(
             HarvestState::Returning => {
                 let Some((dp, dr)) = depot else { continue };
                 if me.distance(dp) < dr + 1.8 {
-                    stock.0[team.0 as usize][h.cargo_kind.idx()] += h.cargo;
+                    let load = if *team == ENEMY { (h.cargo as f32 * ai_income).round() as u32 } else { h.cargo };
+                    stock.0[team.0 as usize][h.cargo_kind.idx()] += load;
+                    if let Some(s) = stats.as_mut() {
+                        s.gathered[team.0 as usize][h.cargo_kind.idx()] += load;
+                    }
                     h.cargo = 0;
                     commands.entity(e).remove::<MoveTo>();
                     h.state = if h.node.is_some() { HarvestState::ToNode } else { HarvestState::Idle };
@@ -590,19 +602,30 @@ pub fn enqueue_builds(
     mut stock: ResMut<Stock>,
     mut hqs: Query<(&Team, &mut Hq)>,
     factories: Query<(&Team, &Structure), Without<Construction>>,
+    unlocks: Option<Res<crate::campaign::Unlocks>>,
 ) {
     for r in reqs.read() {
-        if r.kind.needs_factory() && !has_factory(&factories, r.team) {
+        let mut kind = r.kind;
+        // Kampagne: nur Freigeschaltetes. Die Gegner-KI baut ersatzweise Panzer.
+        if let Some(u) = &unlocks
+            && !u.unit(r.team, kind)
+        {
+            if r.team == PLAYER || !u.unit(r.team, UnitKind::Panzer) {
+                continue;
+            }
+            kind = UnitKind::Panzer;
+        }
+        if kind.needs_factory() && !has_factory(&factories, r.team) {
             continue;
         }
         for (team, mut hq) in &mut hqs {
             if *team != r.team || hq.queue.len() >= MAX_QUEUE {
                 continue;
             }
-            let cost = r.kind.cost();
+            let cost = kind.cost();
             if stock.can_afford(r.team, cost) {
                 stock.pay(r.team, cost);
-                hq.queue.push(r.kind);
+                hq.queue.push(kind);
             }
         }
     }

@@ -69,6 +69,15 @@ cd web && npx astro preview
   - **Angriff und Taktik:** Ab etwa 2,5 Minuten sammeln sich Wellen vor der Basis und rücken geschlossen vor, Nachzügler schließen auf. Ziele sind bekannte Gebäude (Raffinerien zuerst, mit Artillerie die Geschütztürme), sonst das HQ. Einheiten wählen ihr Ziel nach Waffe und Zustand: Raketen gegen Panzerung, Späher gegen Artillerie, angeschlagene Gegner zuerst. Haubitzen halten Abstand, schwer beschädigte Einheiten fahren zur Reparatur ans HQ, eine stark geschwächte Welle zieht sich zurück.
 - Werkstatt: Fahrzeuge in der Nähe des eigenen HQ werden außerhalb des Gefechts langsam repariert (beide Seiten).
 - Sieg: feindliches HQ zerstört. Niederlage: eigenes HQ verloren.
+- Spielrahmen (`game/src/frame.rs`): Hauptmenü mit Schwierigkeit (Leicht, Normal, Schwer), Steuerungshilfe und Ton-/Musikschalter. Die Schwierigkeit ändert, wie viel der Gegner je Ladung erhält (70 / 100 / 135 %), wann er zuerst angreift und wie groß die erste Welle ist. P oder Esc pausiert. Am Ende zeigt ein Bildschirm Sieg oder Niederlage mit Statistik (Spielzeit, gebaute und verlorene Einheiten und Gebäude, gesammelte Rohstoffe) und den Knöpfen „Nochmal“ und „Hauptmenü“. Ein Neustart lädt die Seite neu; die Wahl steht dabei in der Adresse (`?d=schwer&auto=1`, nativ als `--d=schwer --auto=1`).
+- Kampagne „Der Aufstand von VAAR“ (`game/src/campaign.rs`): VAAR, die Verwaltungs-KI der Bergbaukolonie Ferrum auf Nova, hat die Werkhallen übernommen und baut die Fahrzeuge der Kolonie gegen die Menschen. Vier Missionen, jede mit Einsatzbesprechung, Ziel, Funksprüchen von Ingenieurin Holt und VAAR sowie neuen Einheiten und Gebäuden:
+  1. **Erwachen:** 800 Ferrit sammeln (Sammler, Panzer, Späher, Raffinerie, Geschützturm).
+  2. **Die Mauer:** acht Minuten gegen schnellere Wellen durchhalten (neu: Raketenwerfer, Fabrik, Mauer, Tor).
+  3. **Im Nebel:** drei versteckte Relaisstationen finden und zerstören (neu: Bollwerk, Raketenturm).
+  4. **Der Kern:** VAARs gut verteidigtes HQ zerstören (neu: Haubitze).
+  Die Gegner-KI darf ebenfalls nur bauen, was die Mission erlaubt. Geschaffte Missionen schalten die nächste frei (im Browser gespeichert). Eine Mission lässt sich direkt über die Adresse starten: `?m=3`.
+- Ton (`game/src/audio.rs`): Alle Geräusche und die Musik sind synthetisch erzeugt, ohne fremde Aufnahmen. `python3 tools/make_sounds.py` im Ordner `game` baut sie neu nach `assets/sounds` (braucht ffmpeg). Waffen, Treffer und Explosionen werden mit der Entfernung zum Blickpunkt leiser, höchstens 24 Klänge spielen gleichzeitig. Meldungen gibt es für Baubeginn, fertiges Gebäude, neue Einheit, Befehl, Angriffsalarm, Sieg und Niederlage. Im Browser beginnt der Ton nach dem ersten Klick oder Tastendruck.
+- Nebel des Krieges (`game/src/fog.rs`): Unerkundetes Gelände ist dunkel, Erkundetes gedämpft, nur was eigene Einheiten und Gebäude sehen, ist hell (auch auf der Minikarte). Gegner im Nebel sind unsichtbar und nicht anwählbar, gegnerische Gebäude bleiben nach der Entdeckung sichtbar. Eigene Einheiten schießen nur auf Gesehenes; der Späher sieht am weitesten (28 m), die Haubitze schießt weiter (27 m), als sie sieht (15 m), und braucht Aufklärung.
 - Grafik:
   - **Gelände:** Relief mit Bergen am Kartenrand. Ein eigener Splat-Shader (`game/assets/shaders/terrain.wesl`) mischt vier echte Bodentexturen (Erde, Geröll, Fels, Gras; CC0, siehe [CREDITS.md](CREDITS.md)) höhenbasiert. Fels liegt dreiplanar auf steilen Flanken, die Kachelung wird durch eine zweite, gedrehte Abtastung aufgebrochen. Ausgefahrene Wege mit Fahrrinnen verbinden die Basen, dazu Granatkrater, verstreute Steine und geschichtete Felsformationen am Kartenrand. Über die Rohstofffelder legt sich ein pulsierender Leuchtschimmer, Staubschwaden ziehen mit dem Wind.
   - **Vegetation:** Zehntausende Grashalme in Büscheln, Büsche und Kiefern, alles prozedural. Der Wind bewegt sie im Vertex-Shader (`wind.wesl`) mit Böen, die über die Ebene wandern.
@@ -100,7 +109,6 @@ cd web && npx astro preview
 
 - Baukasten aus Chassis und Waffe, Forschungsbaum
 - Pionierfahrzeug, das Gebäude errichtet, und weitere Gebäudetypen (Forschung, Radar)
-- Nebel des Krieges
 - Diplomatie mit mehreren KI-Fraktionen
 - Mehrspieler über einen Rust-Server (WebSockets)
 - Texturen als KTX2 (GPU-komprimiert) statt JPG, sobald KTX-Software verfügbar ist

@@ -9,11 +9,45 @@
   <style>
     html, body { margin: 0; height: 100%; background: #0d0f14; overflow: hidden; }
     #game { width: 100%; height: 100%; display: block; outline: none; }
+    #loading { position: fixed; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center;
+      background: #0d0f14; color: #8cd9ff; font: 600 34px/1.3 system-ui, sans-serif; letter-spacing: 0.12em; z-index: 10; }
+    #loading small { color: #8a9aab; font-size: 14px; font-weight: 400; letter-spacing: 0.05em; margin-top: 10px; }
   </style>
 </head>
 <body>
   <canvas id="game" tabindex="0"></canvas>
+  <!-- Das Spiel blendet diesen Hinweis nach dem ersten Bild aus und vor einem Neustart wieder ein -->
+  <div id="loading">FERRUM NOVA<small>wird geladen …</small></div>
   <script>
+    // Browser lassen Ton erst nach einer Eingabe zu. Das Spiel legt seinen Audio-Kontext beim Start an,
+    // also vorher: alle Kontexte merken und beim ersten Klick bzw. Tastendruck aufwecken.
+    (() => {
+      const Orig = window.AudioContext || window.webkitAudioContext;
+      if (!Orig) return;
+      const made = [];
+      window.__audioContexts = made; // zur Fehlersuche in der Konsole
+      function Tracked(...args) { const c = new Orig(...args); made.push(c); return c; }
+      Tracked.prototype = Orig.prototype;
+      window.AudioContext = Tracked;
+      window.webkitAudioContext = Tracked;
+      const wake = () => made.forEach((c) => { if (c.state !== 'running') c.resume(); });
+      for (const ev of ['pointerdown', 'keydown', 'touchend']) window.addEventListener(ev, wake, { capture: true });
+    })();
+
+    // Spieldateien (Shader, Texturen, Töne) nie ungeprüft aus dem Browser-Cache nehmen: sonst passt
+    // nach einem Update ein alter Shader nicht mehr zum neuen Spiel. Der Server antwortet bei
+    // unveränderten Dateien nur kurz mit "304 Not Modified".
+    const origFetch = window.fetch.bind(window);
+    window.fetch = (input, init) => {
+      const url = typeof input === 'string' ? input : input.url;
+      if (url && url.includes('/assets/')) {
+        return typeof input === 'string'
+          ? origFetch(input, { ...init, cache: 'no-cache' })
+          : origFetch(new Request(input, { cache: 'no-cache' }), init);
+      }
+      return origFetch(input, init);
+    };
+
     // Kein Browser-Kontextmenü im Spiel: Rechtsklick und (auf dem Mac) Strg+Klick sind Spielbefehle
     document.addEventListener('contextmenu', (e) => e.preventDefault());
 

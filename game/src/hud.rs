@@ -28,8 +28,6 @@ pub struct QueueText;
 #[derive(Component)]
 pub struct SelectionText;
 #[derive(Component)]
-pub struct OutcomeText;
-#[derive(Component)]
 pub struct AlertText;
 
 /// Leiste mit den ausgewählten Einheiten (über der unteren Leiste)
@@ -213,18 +211,6 @@ pub fn setup_hud(mut commands: Commands) {
         Visibility::Hidden,
         SelectionBox,
     ));
-
-    // Sieg/Niederlage
-    commands.spawn((
-        Node {
-            position_type: PositionType::Absolute,
-            width: percent(100),
-            top: percent(40),
-            justify_content: JustifyContent::Center,
-            ..default()
-        },
-        children![(label("", 54.0), OutcomeText)],
-    ));
 }
 
 pub fn build_buttons(
@@ -234,6 +220,7 @@ pub fn build_buttons(
     mut q: Query<(&BuildButton, &RelativeCursorPosition, &mut BackgroundColor)>,
     mut w: MessageWriter<BuildRequest>,
     mut placing: ResMut<Placing>,
+    mut sfx: MessageWriter<crate::audio::PlaySfx>,
 ) {
     let pressed_now = clicks
         .read()
@@ -241,6 +228,7 @@ pub fn build_buttons(
     for (btn, rel, mut bg) in &mut q {
         let over = rel.cursor_over();
         if over && pressed_now {
+            sfx.write(crate::audio::PlaySfx::ui(crate::audio::Sfx::UiClick));
             match btn.0 {
                 BuildItem::Unit(kind) => {
                     w.write(BuildRequest { team: PLAYER, kind });
@@ -280,7 +268,6 @@ pub fn build_hotkeys(keys: Res<ButtonInput<KeyCode>>, mut w: MessageWriter<Build
 #[allow(clippy::type_complexity)]
 pub fn update_hud(
     stock: Res<Stock>,
-    outcome: Res<Outcome>,
     hqs: Query<(&Team, &Hq)>,
     units: Query<(&Team, &Unit, Has<Selected>)>,
     structures: Query<(&Team, &Structure), Without<Construction>>,
@@ -292,7 +279,6 @@ pub fn update_hud(
         Query<&mut Text, With<StockText>>,
         Query<&mut Text, With<QueueText>>,
         Query<&mut Text, With<SelectionText>>,
-        Query<&mut Text, With<OutcomeText>>,
         Query<&mut Text, With<AlertText>>,
     )>,
 ) {
@@ -354,17 +340,10 @@ pub fn update_hud(
     if let Ok(mut t) = texts.p2().single_mut() {
         **t = sel_text;
     }
-    if let Ok(mut t) = texts.p4().single_mut() {
+    if let Ok(mut t) = texts.p3().single_mut() {
         **t = match alerts.last {
             Some(_) if alerts.since < 4.0 => "Wir werden angegriffen!  [Leertaste]".to_string(),
             _ => String::new(),
-        };
-    }
-    if let Ok(mut t) = texts.p3().single_mut() {
-        **t = match *outcome {
-            Outcome::Running => String::new(),
-            Outcome::Won => "SIEG - der Schwarm ist zerschlagen".into(),
-            Outcome::Lost => "NIEDERLAGE - die Basis ist gefallen".into(),
         };
     }
 }

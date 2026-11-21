@@ -350,6 +350,10 @@ impl BuildingKind {
 #[derive(Component)]
 pub struct Structure(pub BuildingKind);
 
+/// Gegner, den der Spieler gerade nicht sieht (Nebel des Krieges): nicht anwählbar, nicht auf der Karte
+#[derive(Component)]
+pub struct Fogged;
+
 /// Mauerstück oder Tor: sperrt den Weg, wird nur auf Befehl oder beim Durchbruch angegriffen
 #[derive(Component)]
 pub struct Wall;

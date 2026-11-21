@@ -6,9 +6,13 @@
 
 mod ai;
 mod atmo;
+mod audio;
 mod buildings;
+mod campaign;
 mod components;
 mod construction;
+mod frame;
+mod fog;
 mod fx;
 mod hud;
 mod input;
@@ -31,6 +35,7 @@ use bevy::prelude::*;
 use components::*;
 
 fn main() {
+    let config = frame::MatchConfig::load();
     App::new()
         .set_error_handler(bevy::ecs::error::warn)
         .add_plugins(DefaultPlugins.set(WindowPlugin {
@@ -56,6 +61,15 @@ fn main() {
         .insert_resource(Rng(0x2545_F491_4F6C_DD1D))
         .insert_resource(Stock([[200, 50], [200, 50]]))
         .init_resource::<Outcome>()
+        .insert_resource(config)
+        .insert_resource(audio::SoundPrefs::load())
+        .add_message::<audio::PlaySfx>()
+        .init_resource::<frame::Phase>()
+        .init_resource::<fog::FogGrid>()
+        .init_resource::<frame::Stats>()
+        .init_resource::<frame::HelpShown>()
+        .init_resource::<frame::CampaignShown>()
+        .init_resource::<campaign::Unlocks>()
         .init_resource::<units::Snapshot>()
         .init_resource::<input::CamRig>()
         .init_resource::<input::DragState>()
@@ -70,7 +84,9 @@ fn main() {
         .add_message::<units::BuildRequest>()
         .add_message::<construction::PlaceRequest>()
         .add_message::<fx::FxEvent>()
-        .add_systems(Startup, (world::setup_world, input::setup_camera, hud::setup_hud, hud::setup_perf, minimap::setup_minimap, splat::load_terrain_textures, vegetation::setup_vegetation, atmo::setup_atmo))
+        .add_systems(Startup, fog::setup_fog.before(world::setup_world).before(vegetation::setup_vegetation))
+        .add_systems(Startup, (world::setup_world, input::setup_camera, hud::setup_hud, hud::setup_perf, minimap::setup_minimap, splat::load_terrain_textures, vegetation::setup_vegetation, atmo::setup_atmo, frame::setup_frame, frame::autostart, audio::setup_audio))
+        .add_systems(Startup, (campaign::setup_mission.after(world::setup_world), campaign::setup_mission_hud.after(hud::setup_hud)))
         .add_systems(
             Update,
             ((
@@ -108,14 +124,12 @@ fn main() {
                 units::projectiles,
                 units::production,
                 units::repair,
-                units::deaths,
-                units::check_outcome,
-                orders::tick_alerts,
+                (frame::track_stats, units::deaths, units::check_outcome, campaign::mission_tick, orders::tick_alerts).chain(),
             )
                 .chain(),
             )
                 .chain()
-                .run_if(|o: Res<Outcome>| *o == Outcome::Running),
+                .run_if(frame::playing),
         )
         .add_systems(
             Update,
@@ -124,7 +138,15 @@ fn main() {
                 input::draw_overlays,
                 input::draw_orders,
                 orders::draw_markers,
-                hud::build_buttons,
+                hud::build_buttons.run_if(frame::playing),
+                frame::pause_keys.before(construction::placement_input),
+                frame::frame_buttons,
+                frame::update_frame,
+                frame::menu_camera,
+                campaign::enforce_unlocks,
+                frame::hide_loading,
+                (fog::update_fog, fog::hide_enemies).chain(),
+                (audio::fx_sounds, audio::game_sounds, audio::play_sounds, audio::apply_prefs).chain(),
                 hud::update_hud,
                 hud::update_selection_panel,
                 hud::selection_cards,
