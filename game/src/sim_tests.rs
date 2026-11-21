@@ -158,7 +158,7 @@ fn ai_builds_its_base() {
     let mut sq = world.query::<(&Transform, &Building, &Team)>();
     let sites: Vec<(Vec3, Site)> = sq
         .iter(world)
-        .map(|(t, b, team)| (t.translation, Site { pos: t.translation, radius: b.radius, team: *team }))
+        .map(|(t, b, team)| (t.translation, Site { pos: t.translation, radius: b.radius, team: *team, wall: false, gate: false }))
         .collect();
     let nodes: Vec<Vec3> = FIELDS.iter().map(|f| f.0).collect();
     for (kind, pos, _) in &built {
@@ -479,7 +479,7 @@ fn full_match_ai_builds_up_and_attacks() {
     app.world_mut().resource_scope(|world, kit: Mut<ModelKit>| {
         let mut c = world.commands();
         for (x, z) in [(12.0, -2.0), (2.0, -12.0), (14.0, -14.0), (-4.0, -8.0)] {
-            let e = crate::construction::spawn_structure(&mut c, &kit, PLAYER, BuildingKind::Geschuetzturm, PLAYER_HQ_POS + Vec3::new(x, 0.0, z));
+            let e = crate::construction::spawn_structure(&mut c, &kit, PLAYER, BuildingKind::Geschuetzturm, PLAYER_HQ_POS + Vec3::new(x, 0.0, z), None);
             let hp = BuildingKind::Geschuetzturm.hp();
             c.entity(e).remove::<Construction>().insert(Health { hp, max: hp });
         }
@@ -744,4 +744,90 @@ fn alerts_merge_and_expire() {
     a.tick(ALERT_SHOW + 1.0);
     assert!(a.recent().is_none());
     assert!(a.pings.is_empty());
+}
+
+/// Mauerstücke von `a` nach `b` direkt in die Welt setzen (fertig gebaut)
+fn spawn_wall_line(app: &mut App, team: Team, a: Vec3, b: Vec3) -> Vec<Entity> {
+    let (segs, _) = crate::construction::wall_segments(a, b);
+    segs.into_iter()
+        .map(|p| {
+            app.world_mut()
+                .spawn((
+                    Transform::from_translation(terrain::on_ground(p)),
+                    team,
+                    Health { hp: 450.0, max: 450.0 },
+                    Building { radius: BuildingKind::Mauer.radius() },
+                    Structure(BuildingKind::Mauer),
+                    Wall,
+                ))
+                .id()
+        })
+        .collect()
+}
+
+fn nav_app() -> App {
+    let mut app = app();
+    app.init_resource::<crate::nav::NavGrid>()
+        .init_resource::<crate::nav::PathQueue>()
+        .add_systems(Update, (snapshot, crate::nav::update_grid, crate::nav::plan_paths, movement, separation).chain());
+    app
+}
+
+/// Ein Panzer fährt um eine Mauer herum statt hindurch und kommt am Ziel an
+#[test]
+fn unit_drives_around_a_wall() {
+    let mut app = nav_app();
+    spawn_wall_line(&mut app, ENEMY, Vec3::new(0.0, 0.0, -10.0), Vec3::new(0.0, 0.0, 10.0));
+    let tank = app
+        .world_mut()
+        .spawn((
+            Transform::from_translation(terrain::on_ground(Vec3::new(-8.0, 0.0, 0.0))),
+            PLAYER,
+            Health { hp: 220.0, max: 220.0 },
+            Unit { kind: UnitKind::Panzer, speed: 6.0, radius: 1.4 },
+            Heading(0.0),
+            MoveTo(Vec3::new(8.0, 0.0, 0.0)),
+        ))
+        .id();
+    let mut closest_to_wall = f32::MAX;
+    for _ in 0..300 {
+        app.update();
+        let p = app.world().get::<Transform>(tank).expect("Panzer").translation;
+        if p.z.abs() < 10.0 {
+            closest_to_wall = closest_to_wall.min(p.x.abs());
+        }
+    }
+    let p = app.world().get::<Transform>(tank).expect("Panzer").translation;
+    assert!(flat(p).distance(Vec3::new(8.0, 0.0, 0.0)) < 1.5, "nicht angekommen: {p}");
+    assert!(closest_to_wall > 1.2, "durch die Mauer gefahren (Abstand {closest_to_wall})");
+}
+
+/// Ein Ziel hinter einer geschlossenen Mauer: die Einheit im Angriffsmarsch nimmt ein Mauerstück ins Visier
+#[test]
+fn attack_move_breaches_closed_wall() {
+    let mut app = nav_app();
+    let center = Vec3::new(10.0, 0.0, 0.0);
+    let mut ring = Vec::new();
+    for k in 0..4 {
+        let corners = [Vec3::new(-7.0, 0.0, -7.0), Vec3::new(7.0, 0.0, -7.0), Vec3::new(7.0, 0.0, 7.0), Vec3::new(-7.0, 0.0, 7.0)];
+        ring.extend(spawn_wall_line(&mut app, ENEMY, center + corners[k], center + corners[(k + 1) % 4]));
+    }
+    let tank = app
+        .world_mut()
+        .spawn((
+            Transform::from_translation(terrain::on_ground(Vec3::new(-14.0, 0.0, 0.0))),
+            PLAYER,
+            Health { hp: 220.0, max: 220.0 },
+            Unit { kind: UnitKind::Panzer, speed: 6.0, radius: 1.4 },
+            Heading(0.0),
+            Weapon { range: 11.0, damage: 18.0, cooldown: 1.1, timer: 0.0, projectile_speed: 38.0, rocket: false, splash: 0.0, arc: 0.0 },
+            MoveTo(center),
+            AttackMove,
+        ))
+        .id();
+    for _ in 0..20 {
+        app.update();
+    }
+    let target = app.world().get::<AttackTarget>(tank).map(|a| a.0);
+    assert!(target.is_some_and(|t| ring.contains(&t)), "kein Mauerstück als Ziel: {target:?}");
 }

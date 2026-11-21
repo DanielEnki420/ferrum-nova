@@ -1,4 +1,5 @@
 use crate::components::*;
+use crate::nav::{NavGrid, Path, PathQueue};
 use crate::fx::FxEvent;
 use crate::models::ModelKit;
 use crate::orders::{Alerts, GroupSpeed, HoldPosition, Rally};
@@ -16,6 +17,9 @@ pub struct Snap {
     pub team: Team,
     pub radius: f32,
     pub is_building: bool,
+    /// Mauer oder Tor: nur auf Befehl oder beim Durchbruch ein Ziel
+    pub wall: bool,
+    pub gate: bool,
 }
 
 /// Positionen aller kampffähigen Objekte dieses Frames
@@ -33,10 +37,10 @@ fn angle_diff(a: f32, b: f32) -> f32 {
 
 pub fn snapshot(
     mut snap: ResMut<Snapshot>,
-    q: Query<(Entity, &Transform, &Team, Option<&Unit>, Option<&Building>), With<Health>>,
+    q: Query<(Entity, &Transform, &Team, Option<&Unit>, Option<&Building>, Has<Wall>, Has<Gate>), With<Health>>,
 ) {
     snap.0.clear();
-    for (e, t, team, u, b) in &q {
+    for (e, t, team, u, b, wall, gate) in &q {
         snap.0.insert(
             e,
             Snap {
@@ -44,6 +48,8 @@ pub fn snapshot(
                 team: *team,
                 radius: u.map(|u| u.radius).or(b.map(|b| b.radius)).unwrap_or(1.0),
                 is_building: b.is_some(),
+                wall,
+                gate,
             },
         );
     }
@@ -64,7 +70,7 @@ pub fn auto_target(
         let sight = if hold { w.range } else { w.range + 6.0 };
         let mut best: Option<(Entity, f32)> = None;
         for (oe, o) in &snap.0 {
-            if o.team == *team {
+            if o.team == *team || o.wall {
                 continue;
             }
             // Einheiten vor Gebäuden bevorzugen
@@ -162,6 +168,7 @@ pub fn movement(
     mut commands: Commands,
     time: Res<Time>,
     snap: Res<Snapshot>,
+    (grid, mut queue): (Option<Res<NavGrid>>, Option<ResMut<PathQueue>>),
     mut q: Query<(
         Entity,
         &Unit,
@@ -172,10 +179,11 @@ pub fn movement(
         Option<&Weapon>,
         Option<&GroupSpeed>,
         Has<HoldPosition>,
+        Option<&mut Path>,
     )>,
 ) {
     let dt = time.delta_secs();
-    for (e, unit, mut t, mut heading, mv, atk, w, group, hold) in &mut q {
+    for (e, unit, mut t, mut heading, mv, atk, w, group, hold, mut path) in &mut q {
         let me = flat(t.translation);
         let mut goal: Option<(Vec3, f32)> = None;
         let mut engaged = false;
@@ -195,13 +203,53 @@ pub fn movement(
                 goal = Some((flat(m.0), 0.6));
             }
         let Some((g, arrive)) = goal else { continue };
-        let to = g - me;
-        let d = to.length();
+        let d = (g - me).length();
         if d <= arrive.max(0.05) {
             commands.entity(e).remove::<(MoveTo, AttackMove, GroupSpeed)>();
             continue;
         }
-        let dir = to / d;
+        // Wegfindung: der nächsten Ecke des Weges folgen; ohne Weg geradeaus, bis er berechnet ist
+        let mut steer = g;
+        if let (Some(grid), Some(queue)) = (grid.as_deref(), queue.as_deref_mut()) {
+            let tolerance = if engaged { 3.0 } else { 1.0 };
+            match path.as_deref_mut() {
+                Some(p) if flat(p.goal - g).length() <= tolerance => {
+                    if p.version != grid.version {
+                        queue.request(e, g);
+                    }
+                    while p.corners.len() > 1 && flat(p.corners[0] - me).length() < 1.6 {
+                        p.corners.remove(0);
+                        p.best = f32::MAX;
+                        p.stuck = 0.0;
+                    }
+                    if let Some(c) = p.corners.first() {
+                        steer = flat(*c);
+                    }
+                    let dc = (steer - me).length();
+                    // Ziel unerreichbar: am nächstgelegenen Punkt anhalten
+                    if !p.reached && !engaged && p.corners.len() <= 1 && dc < 1.2 {
+                        commands.entity(e).remove::<(MoveTo, AttackMove, GroupSpeed)>();
+                        continue;
+                    }
+                    // festgefahren? dann neu planen
+                    if dc < p.best - 0.3 {
+                        p.best = dc;
+                        p.stuck = 0.0;
+                    } else {
+                        p.stuck += dt;
+                        if p.stuck > 1.5 {
+                            p.stuck = 0.0;
+                            p.best = dc;
+                            queue.request(e, g);
+                        }
+                    }
+                }
+                _ => queue.request(e, g),
+            }
+        }
+        let to = steer - me;
+        let ds = to.length().max(1e-3);
+        let dir = to / ds;
         // erst drehen, dann fahren: Kettenfahrzeuge wenden auf der Stelle
         let want = Heading::from_dir(dir).0;
         let diff = angle_diff(heading.0, want);
@@ -212,19 +260,20 @@ pub fn movement(
             Some(g) if !engaged => unit.speed.min(g.0),
             _ => unit.speed,
         };
-        let step = (speed * align * dt).min(d);
+        let step = (speed * align * dt).min(ds);
         t.translation += dir * step;
     }
 }
 
 /// Einheiten schieben sich auseinander und bleiben außerhalb von Gebäuden
-pub fn separation(snap: Res<Snapshot>, mut q: Query<(Entity, &Unit, &mut Transform)>) {
+pub fn separation(snap: Res<Snapshot>, grid: Option<Res<NavGrid>>, mut q: Query<(Entity, &Unit, &Team, &mut Transform)>) {
     let list: Vec<(Entity, Snap)> = snap.0.iter().map(|(e, s)| (*e, *s)).collect();
-    for (e, unit, mut t) in &mut q {
+    for (e, unit, team, mut t) in &mut q {
         let me = flat(t.translation);
         let mut push = Vec3::ZERO;
         for (oe, o) in &list {
-            if *oe == e {
+            // eigene Tore sind offen
+            if *oe == e || (o.gate && o.team == *team) {
                 continue;
             }
             let min = unit.radius + o.radius;
@@ -237,7 +286,24 @@ pub fn separation(snap: Res<Snapshot>, mut q: Query<(Entity, &Unit, &mut Transfo
                 push += Vec3::new(0.3, 0.0, 0.1);
             }
         }
-        t.translation += push.clamp_length_max(0.5);
+        let push = push.clamp_length_max(0.5);
+        // nicht in Mauern oder Hänge drücken lassen: sonst nur entlang einer Achse oder gar nicht
+        let step = match grid.as_deref() {
+            Some(g) => {
+                let need = crate::nav::need(unit.radius);
+                let here = g.clearance(*team, t.translation);
+                let ok = |p: Vec3| {
+                    let c = g.clearance(*team, p);
+                    c >= need || c >= here
+                };
+                [push, Vec3::new(push.x, 0.0, 0.0), Vec3::new(0.0, 0.0, push.z)]
+                    .into_iter()
+                    .find(|s| ok(t.translation + *s))
+                    .unwrap_or(Vec3::ZERO)
+            }
+            None => push,
+        };
+        t.translation += step;
         t.translation.x = t.translation.x.clamp(-MAP_HALF, MAP_HALF);
         t.translation.z = t.translation.z.clamp(-MAP_HALF, MAP_HALF);
     }

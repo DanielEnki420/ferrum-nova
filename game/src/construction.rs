@@ -26,6 +26,8 @@ pub struct PlaceRequest {
     pub team: Team,
     pub kind: BuildingKind,
     pub pos: Vec3,
+    /// Ausrichtung (Mauern und Tore), sonst Tor zur Kartenmitte
+    pub rot: Option<Quat>,
 }
 
 /// Baumodus des Spielers
@@ -35,6 +37,10 @@ pub struct Placing {
     ghost: Option<(Entity, BuildingKind, bool)>,
     /// Dieser Mausklick gehörte dem Baumodus (nicht als Auswahl werten)
     pub block_click: bool,
+    /// Mauer: Startpunkt der Linie
+    line_start: Option<Vec3>,
+    /// Mauer: Stücke und Gesamtkosten der aktuellen Linie (für die Hinweiszeile)
+    pub line_info: Option<(usize, [u32; 2])>,
 }
 
 /// Blickrichtung neuer Gebäude: Tor zur Kartenmitte
@@ -48,6 +54,8 @@ pub struct Site {
     pub pos: Vec3,
     pub radius: f32,
     pub team: Team,
+    pub wall: bool,
+    pub gate: bool,
 }
 
 pub fn can_place(kind: BuildingKind, pos: Vec3, team: Team, sites: &[Site], nodes: &[Vec3]) -> bool {
@@ -56,16 +64,31 @@ pub fn can_place(kind: BuildingKind, pos: Vec3, team: Team, sites: &[Site], node
     if pos.x.abs() > lim || pos.z.abs() > lim {
         return false;
     }
+    // Bauen nur nahe eigener Gebäude (Mauern verlängern die Reichweite nicht)
     let near_base = sites
         .iter()
-        .any(|s| s.team == team && flat(s.pos).distance(flat(pos)) < BUILD_RANGE + s.radius);
+        .any(|s| s.team == team && !s.wall && flat(s.pos).distance(flat(pos)) < BUILD_RANGE + s.radius);
     if !near_base {
         return false;
     }
-    if sites.iter().any(|s| flat(s.pos).distance(flat(pos)) < r + s.radius + 1.5) {
+    let too_close = sites.iter().any(|s| {
+        let own = s.team == team;
+        let min = match (kind, s.wall, s.gate) {
+            // Mauerstücke reihen sich aneinander, auch über Ecken
+            (BuildingKind::Mauer, true, false) if own => 1.3,
+            (BuildingKind::Mauer, true, true) if own => r + s.radius - 0.4,
+            // ein Tor ersetzt eigene Mauerstücke
+            (BuildingKind::Tor, true, false) if own => return false,
+            _ if kind.is_wall() || s.wall => r + s.radius + 0.4,
+            _ => r + s.radius + 1.5,
+        };
+        flat(s.pos).distance(flat(pos)) < min
+    });
+    if too_close {
         return false;
     }
-    if nodes.iter().any(|n| flat(*n).distance(flat(pos)) < r + 4.0) {
+    let node_gap = if kind.is_wall() { 3.0 } else { 4.0 };
+    if nodes.iter().any(|n| flat(*n).distance(flat(pos)) < r + node_gap) {
         return false;
     }
     // Boden darf nicht zu uneben sein
@@ -96,12 +119,13 @@ pub fn find_spot(kind: BuildingKind, target: Vec3, team: Team, sites: &[Site], n
 }
 
 /// Neues Gebäude im Bau anlegen
-pub fn spawn_structure(c: &mut Commands, kit: &ModelKit, team: Team, kind: BuildingKind, pos: Vec3) -> Entity {
+pub fn spawn_structure(c: &mut Commands, kit: &ModelKit, team: Team, kind: BuildingKind, pos: Vec3, rot: Option<Quat>) -> Entity {
     let ground = terrain::on_ground(pos);
     let depth = kit.structures[kind.idx()][team.0 as usize].height;
+    let tf = Transform::from_translation(ground).looking_to(-facing(team), Vec3::Y);
     let root = c
         .spawn((
-            Transform::from_translation(ground).looking_to(-facing(team), Vec3::Y),
+            rot.map_or(tf, |r| tf.with_rotation(r)),
             Visibility::default(),
             team,
             Health { hp: kind.hp() * 0.1, max: kind.hp() },
@@ -123,15 +147,43 @@ pub fn spawn_structure(c: &mut Commands, kit: &ModelKit, team: Team, kind: Build
             c.entity(root).insert(Depot);
         }
         BuildingKind::Fabrik => {}
+        BuildingKind::Mauer => {
+            c.entity(root).insert(Wall);
+        }
+        BuildingKind::Tor => {
+            c.entity(root).insert((Wall, Gate));
+        }
     }
     root
 }
 
-fn collect_sites(q: &Query<(&Transform, &Building, &Team)>) -> Vec<Site> {
-    q.iter().map(|(t, b, team)| Site { pos: t.translation, radius: b.radius, team: *team }).collect()
+type SiteQuery<'w, 's> = Query<'w, 's, (&'static Transform, &'static Building, &'static Team, Has<Wall>, Has<Gate>)>;
+
+fn collect_sites(q: &SiteQuery) -> Vec<Site> {
+    q.iter().map(|(t, b, team, wall, gate)| Site { pos: t.translation, radius: b.radius, team: *team, wall, gate }).collect()
+}
+
+/// Mittelpunkte der 2-m-Mauerstücke von `a` Richtung `b` und das tatsächliche Linienende
+pub fn wall_segments(a: Vec3, b: Vec3) -> (Vec<Vec3>, Vec3) {
+    let d = flat(b - a);
+    let len = d.length();
+    if len < 0.5 {
+        return (vec![a], a);
+    }
+    let dir = d / len;
+    let n = ((len / 2.0).round() as usize).max(1);
+    let centers = (0..n).map(|i| a + dir * (1.0 + 2.0 * i as f32)).collect();
+    (centers, a + dir * (2.0 * n as f32))
+}
+
+/// Ausrichtung eines Mauerstücks entlang `dir` (lokale X-Achse)
+pub fn along(dir: Vec3) -> Quat {
+    let d = flat(dir).normalize_or(Vec3::X);
+    Quat::from_rotation_y((-d.z).atan2(d.x))
 }
 
 /// Baumodus des Spielers: Tasten, Vorschau, Klick
+#[allow(clippy::too_many_arguments)]
 pub fn placement_input(
     mut commands: Commands,
     keys: Res<ButtonInput<KeyCode>>,
@@ -143,7 +195,8 @@ pub fn placement_input(
     stock: Res<Stock>,
     mut placing: ResMut<Placing>,
     mut reqs: MessageWriter<PlaceRequest>,
-    sites: Query<(&Transform, &Building, &Team)>,
+    sites: SiteQuery,
+    walls: Query<(&Transform, &Team, &Structure), With<Building>>,
     nodes: Query<&Transform, With<ResourceNode>>,
     mut ghosts: Query<(&mut Transform, &mut Visibility), (Without<Building>, Without<ResourceNode>)>,
     mut gizmos: Gizmos,
@@ -152,17 +205,27 @@ pub fn placement_input(
         (KeyCode::KeyG, BuildingKind::Geschuetzturm),
         (KeyCode::KeyH, BuildingKind::Raffinerie),
         (KeyCode::KeyJ, BuildingKind::Fabrik),
+        (KeyCode::KeyK, BuildingKind::Mauer),
+        (KeyCode::KeyI, BuildingKind::Tor),
     ] {
         if keys.just_pressed(key) {
             placing.kind = if placing.kind == Some(kind) { None } else { Some(kind) };
+            placing.line_start = None;
         }
     }
     if placing.kind.is_some() && (keys.just_pressed(KeyCode::Escape) || mouse.just_pressed(MouseButton::Right)) {
-        placing.kind = None;
+        // Mauer: erst die angefangene Linie verwerfen, dann den Baumodus
+        if placing.line_start.is_some() {
+            placing.line_start = None;
+        } else {
+            placing.kind = None;
+        }
         placing.block_click = true;
     }
+    placing.line_info = None;
 
     let Some(kind) = placing.kind else {
+        placing.line_start = None;
         if let Some((g, _, _)) = placing.ghost.take() {
             commands.entity(g).try_despawn();
         }
@@ -177,16 +240,97 @@ pub fn placement_input(
 
     let site_list = collect_sites(&sites);
     let node_list: Vec<Vec3> = nodes.iter().map(|t| t.translation).collect();
+    let shift = keys.any_pressed([KeyCode::ShiftLeft, KeyCode::ShiftRight]);
+
+    // Bauradius um eigene Gebäude
+    for s in site_list.iter().filter(|s| s.team == PLAYER && !s.wall) {
+        let c = terrain::on_ground(s.pos) + Vec3::Y * 0.3;
+        gizmos.circle(Isometry3d::new(c, Quat::from_rotation_x(PI / 2.0)), BUILD_RANGE + s.radius, Color::srgba(0.5, 0.8, 1.0, 0.25));
+    }
+
+    // --- Mauer: Linie von Klick zu Klick, Vorschau als Umrisse
+    if kind == BuildingKind::Mauer {
+        if let Some((g, _, _)) = placing.ghost.take() {
+            commands.entity(g).try_despawn();
+        }
+        let Some(p) = point else { return };
+        let start = placing.line_start;
+        let (segs, end) = match start {
+            Some(a) => wall_segments(a, p),
+            None => (vec![p], p),
+        };
+        let rot = along(start.map_or(Vec3::X, |a| p - a));
+        // Gültigkeit Stück für Stück, Kosten laufen mit
+        let mut sim = site_list.clone();
+        let mut budget = stock.0[PLAYER.0 as usize];
+        let cost = kind.cost();
+        let mut ok = Vec::new();
+        for c in &segs {
+            let afford = budget[0] >= cost[0] && budget[1] >= cost[1];
+            let valid = afford && can_place(kind, *c, PLAYER, &sim, &node_list);
+            if valid {
+                budget[0] -= cost[0];
+                budget[1] -= cost[1];
+                sim.push(Site { pos: *c, radius: kind.radius(), team: PLAYER, wall: true, gate: false });
+            }
+            ok.push(valid);
+            let col = if valid { Color::srgb(0.4, 1.0, 0.5) } else { Color::srgb(1.0, 0.35, 0.3) };
+            let base = terrain::on_ground(*c);
+            for h in [0.15, 1.9] {
+                gizmos.rect(Isometry3d::new(base + Vec3::Y * h, rot * Quat::from_rotation_x(PI / 2.0)), Vec2::new(2.0, 0.8), col);
+            }
+        }
+        let n_ok = ok.iter().filter(|v| **v).count();
+        placing.line_info = Some((n_ok, [cost[0] * n_ok as u32, cost[1] * n_ok as u32]));
+        if mouse.just_pressed(MouseButton::Left) {
+            placing.block_click = true;
+            match start {
+                None => placing.line_start = Some(p),
+                Some(_) => {
+                    for (c, valid) in segs.iter().zip(&ok) {
+                        if *valid {
+                            reqs.write(PlaceRequest { team: PLAYER, kind, pos: *c, rot: Some(rot) });
+                        }
+                    }
+                    // Shift: am Ende weiterziehen, sonst fertig
+                    if shift {
+                        placing.line_start = Some(end);
+                    } else {
+                        placing.line_start = None;
+                        placing.kind = None;
+                    }
+                }
+            }
+        }
+        return;
+    }
+
+    // Tor: am nächsten eigenen Mauerstück einrasten und dessen Richtung übernehmen
+    let (point, rot) = match (kind, point) {
+        (BuildingKind::Tor, Some(p)) => {
+            let snap = walls
+                .iter()
+                .filter(|(t, team, s)| **team == PLAYER && s.0 == BuildingKind::Mauer && flat(t.translation).distance(flat(p)) < 3.0)
+                .min_by(|a, b| flat(a.0.translation).distance(flat(p)).total_cmp(&flat(b.0.translation).distance(flat(p))));
+            match snap {
+                Some((t, _, _)) => (Some(t.translation), Some(t.rotation)),
+                None => (Some(p), None),
+            }
+        }
+        _ => (point, None),
+    };
+
     let valid = point.is_some_and(|p| can_place(kind, p, PLAYER, &site_list, &node_list) && stock.can_afford(PLAYER, kind.cost()));
 
     // Vorschau neu aufbauen, wenn sich Typ oder Gültigkeit ändert
+    let default_rot = Transform::default().looking_to(-facing(PLAYER), Vec3::Y).rotation;
     if placing.ghost.is_none_or(|(_, k, v)| k != kind || v != valid) {
         if let Some((g, _, _)) = placing.ghost.take() {
             commands.entity(g).try_despawn();
         }
         let root = commands
             .spawn((
-                Transform::from_translation(terrain::on_ground(point.unwrap_or_default())).looking_to(-facing(PLAYER), Vec3::Y),
+                Transform::from_translation(terrain::on_ground(point.unwrap_or_default())).with_rotation(rot.unwrap_or(default_rot)),
                 if point.is_some() { Visibility::Visible } else { Visibility::Hidden },
             ))
             .id();
@@ -199,6 +343,7 @@ pub fn placement_input(
         match point {
             Some(p) => {
                 t.translation = terrain::on_ground(p);
+                t.rotation = rot.unwrap_or(default_rot);
                 *vis = Visibility::Visible;
             }
             None => *vis = Visibility::Hidden,
@@ -206,20 +351,15 @@ pub fn placement_input(
     }
 
     let Some(p) = point else { return };
-    // Bauradius um eigene Gebäude und Grundfläche
     let col = if valid { Color::srgb(0.4, 1.0, 0.5) } else { Color::srgb(1.0, 0.35, 0.3) };
     let ground = terrain::on_ground(p) + Vec3::Y * 0.2;
     gizmos.circle(Isometry3d::new(ground, Quat::from_rotation_x(PI / 2.0)), kind.radius(), col);
-    for s in site_list.iter().filter(|s| s.team == PLAYER) {
-        let c = terrain::on_ground(s.pos) + Vec3::Y * 0.3;
-        gizmos.circle(Isometry3d::new(c, Quat::from_rotation_x(PI / 2.0)), BUILD_RANGE + s.radius, Color::srgba(0.5, 0.8, 1.0, 0.25));
-    }
 
     if mouse.just_pressed(MouseButton::Left) {
         placing.block_click = true;
         if valid {
-            reqs.write(PlaceRequest { team: PLAYER, kind, pos: p });
-            if !keys.any_pressed([KeyCode::ShiftLeft, KeyCode::ShiftRight]) {
+            reqs.write(PlaceRequest { team: PLAYER, kind, pos: p, rot });
+            if !shift {
                 placing.kind = None;
             }
         }
@@ -232,7 +372,8 @@ pub fn place_buildings(
     mut reqs: MessageReader<PlaceRequest>,
     mut stock: ResMut<Stock>,
     kit: Res<ModelKit>,
-    sites: Query<(&Transform, &Building, &Team)>,
+    sites: SiteQuery,
+    walls: Query<(Entity, &Transform, &Team, &Structure)>,
     nodes: Query<&Transform, With<ResourceNode>>,
     mut fx: MessageWriter<FxEvent>,
 ) {
@@ -243,8 +384,17 @@ pub fn place_buildings(
             continue;
         }
         stock.pay(r.team, r.kind.cost());
-        spawn_structure(&mut commands, &kit, r.team, r.kind, r.pos);
-        site_list.push(Site { pos: r.pos, radius: r.kind.radius(), team: r.team });
+        // Ein Tor ersetzt die eigenen Mauerstücke an seiner Stelle
+        if r.kind == BuildingKind::Tor {
+            for (e, t, team, s) in &walls {
+                if *team == r.team && s.0 == BuildingKind::Mauer && flat(t.translation).distance(flat(r.pos)) < 3.6 {
+                    commands.entity(e).try_despawn();
+                    site_list.retain(|site| flat(site.pos).distance(flat(t.translation)) > 0.01);
+                }
+            }
+        }
+        spawn_structure(&mut commands, &kit, r.team, r.kind, r.pos, r.rot);
+        site_list.push(Site { pos: r.pos, radius: r.kind.radius(), team: r.team, wall: r.kind.is_wall(), gate: r.kind == BuildingKind::Tor });
         fx.write(FxEvent::BuildDust { pos: terrain::on_ground(r.pos), radius: r.kind.radius() });
     }
 }
@@ -307,5 +457,25 @@ pub fn structure_aim(
         let diff = (want - cur + PI).rem_euclid(TAU) - PI;
         let speed = if atk.is_some() { 2.2 } else { 0.4 };
         ht.rotation = Quat::from_rotation_y(cur + diff.clamp(-speed * dt, speed * dt));
+    }
+}
+
+/// Tore öffnen sich, wenn eigene Einheiten nahe sind: der Flügel fährt in den Boden
+pub fn gate_doors(
+    time: Res<Time>,
+    mut doors: Query<(&mut models::GateDoor, &mut Transform, &ChildOf)>,
+    pivots: Query<&ChildOf, Without<models::GateDoor>>,
+    roots: Query<(&Transform, &Team), (With<Gate>, Without<models::GateDoor>, Without<Construction>)>,
+    units: Query<(&Transform, &Team), (With<Unit>, Without<models::GateDoor>)>,
+) {
+    let dt = time.delta_secs();
+    for (mut door, mut t, parent) in &mut doors {
+        let Ok(root) = pivots.get(parent.parent()) else { continue };
+        let Ok((rt, team)) = roots.get(root.parent()) else { continue };
+        let near = units.iter().any(|(ut, ut_team)| ut_team == team && flat(ut.translation).distance(flat(rt.translation)) < 7.5);
+        let target = if near { 1.0 } else { 0.0 };
+        let speed = if near { 1.6 } else { 0.8 };
+        door.open += (target - door.open).clamp(-speed * dt, speed * dt);
+        t.translation.y = -2.1 * door.open;
     }
 }

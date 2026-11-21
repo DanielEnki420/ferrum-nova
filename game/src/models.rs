@@ -31,7 +31,7 @@ pub struct ModelKit {
     /// Beton und Bauteile der Gebäude (Farbe aus den Vertexfarben)
     pub building_mat: Handle<StandardMaterial>,
     /// Baubare Gebäude je Typ (Geschützturm, Raffinerie, Fabrik) und Team
-    pub structures: [[StructMeshes; 2]; 3],
+    pub structures: [[StructMeshes; 2]; 5],
     /// Bauvorschau: gültiger und ungültiger Platz
     pub ghost: [Handle<StandardMaterial>; 2],
     /// Lampen und Fenster: unbeleuchtet, Helligkeit in den Vertexfarben
@@ -131,6 +131,8 @@ impl ModelKit {
                 [buildings::build_turret(PLAYER, meshes), buildings::build_turret(ENEMY, meshes)],
                 [buildings::build_refinery(PLAYER, meshes), buildings::build_refinery(ENEMY, meshes)],
                 [buildings::build_factory(PLAYER, meshes), buildings::build_factory(ENEMY, meshes)],
+                [buildings::build_wall(PLAYER, meshes), buildings::build_wall(ENEMY, meshes)],
+                [buildings::build_gate(PLAYER, meshes), buildings::build_gate(ENEMY, meshes)],
             ],
             ghost: [
                 ghost(mats, Color::srgba(0.35, 1.0, 0.5, 0.38)),
@@ -166,6 +168,10 @@ pub fn build_structure(c: &mut Commands, k: &ModelKit, pivot: Entity, team: Team
         }
         if let Some(m) = &sm.glass {
             part(c, pivot, m, &k.glass, Transform::default());
+        }
+        if let Some(m) = &sm.door {
+            let door = part(c, pivot, m, &k.vehicle_mat, Transform::default());
+            c.entity(door).insert(GateDoor { open: 0.0 });
         }
         if let Some((m, pos)) = &sm.spin {
             let fan = part(c, pivot, m, &k.building_mat, Transform::from_translation(*pos));
@@ -288,4 +294,10 @@ pub fn pulse_beacons(time: Res<Time>, kit: Option<Res<ModelKit>>, mut mats: ResM
     if let Some(mut m) = mats.get_mut(&kit.beacon) {
         m.base_color = Color::LinearRgba(BEACON * k);
     }
+}
+
+/// Torflügel: 0 geschlossen, 1 ganz im Boden versenkt
+#[derive(Component)]
+pub struct GateDoor {
+    pub open: f32,
 }

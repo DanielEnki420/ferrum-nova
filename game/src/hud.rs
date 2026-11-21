@@ -121,7 +121,10 @@ pub fn setup_hud(mut commands: Commands) {
         BackgroundColor(PANEL),
         children![
             label_col("FERRUM NOVA", 16.0, Color::srgb(0.55, 0.85, 1.0)),
-            (label("", 16.0), StockText),
+            (
+                Node { flex_direction: FlexDirection::Column, flex_shrink: 0.0, margin: UiRect::horizontal(px(12)), ..default() },
+                children![(label("", 15.0), StockText), (label("", 12.0), QueueText)],
+            ),
             label("WASD/Mitteltaste Kamera | Q/E drehen | Rad Zoom | Leertaste letzter Angriff | Pos1 Basis", 13.0),
         ],
     ));
@@ -149,15 +152,8 @@ pub fn setup_hud(mut commands: Commands) {
             build_button(BuildItem::Structure(BuildingKind::Geschuetzturm), "G"),
             build_button(BuildItem::Structure(BuildingKind::Raffinerie), "H"),
             build_button(BuildItem::Structure(BuildingKind::Fabrik), "J"),
-            (
-                Node {
-                    flex_direction: FlexDirection::Column,
-                    margin: UiRect::left(px(12)),
-                    row_gap: px(6),
-                    ..default()
-                },
-                children![(label("", 14.0), QueueText)],
-            ),
+            build_button(BuildItem::Structure(BuildingKind::Mauer), "K"),
+            build_button(BuildItem::Structure(BuildingKind::Tor), "I"),
         ],
     ));
 
@@ -302,7 +298,7 @@ pub fn update_hud(
     let s = stock.0[PLAYER.0 as usize];
     let count = units.iter().filter(|(t, _, _)| **t == PLAYER).count();
     if let Ok(mut t) = texts.p0().single_mut() {
-        **t = format!("Ferrit: {}    Plasma: {}    Einheiten: {}", s[0], s[1], count);
+        **t = format!("Ferrit: {}   Plasma: {}   Einheiten: {}", s[0], s[1], count);
     }
     let queue = hqs
         .iter()
@@ -333,7 +329,14 @@ pub fn update_hud(
             counts[u.kind.idx()] += 1;
         }
     }
-    let sel_text = if let Some(k) = placing.kind {
+    let sel_text = if placing.kind == Some(BuildingKind::Mauer) {
+        match placing.line_info {
+            Some((n, c)) if n > 1 || c[0] > 0 => format!("Mauer: {n} Stuecke, {} F | Klick: bauen | Shift+Klick: weiterziehen | Rechtsklick/Esc: Linie verwerfen", c[0]),
+            _ => "Mauer: Startpunkt klicken, dann Endpunkt | Rechtsklick/Esc: abbrechen".to_string(),
+        }
+    } else if placing.kind == Some(BuildingKind::Tor) {
+        "Tor: auf eine eigene Mauer setzen (rastet ein) | eigene Einheiten fahren durch | Esc: abbrechen".to_string()
+    } else if let Some(k) = placing.kind {
         format!("{} platzieren: Linksklick | Shift: mehrere | Rechtsklick/Esc: abbrechen", k.name())
     } else if mode.left_commands && counts.iter().sum::<i32>() == 0 && selected_hq.iter().any(|t| *t == PLAYER) {
         "Hauptquartier: Klick ins Gelaende setzt den Sammelpunkt | Rechtsklick: Auswahl aufheben".to_string()

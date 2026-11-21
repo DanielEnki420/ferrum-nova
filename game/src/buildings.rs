@@ -295,6 +295,8 @@ pub struct StructMeshes {
     pub head: Option<(Handle<Mesh>, Handle<Mesh>, Vec3)>,
     /// Rotierendes Bauteil (Lüfter) und seine Lage
     pub spin: Option<(Handle<Mesh>, Vec3)>,
+    /// Torflügel (senkt sich in den Boden, wenn eigene Einheiten kommen)
+    pub door: Option<Handle<Mesh>>,
     /// So tief steckt das Gebäude zu Baubeginn im Boden
     pub height: f32,
     /// Schornsteinmündungen (lokal) und ob dort Dampf (sonst Rauch) austritt
@@ -432,6 +434,7 @@ pub fn build_turret(team: Team, meshes: &mut Assets<Mesh>) -> StructMeshes {
         lamps: None,
         head: Some((meshes.add(h.build().expect("Kopf")), meshes.add(hg.build().expect("Kopf-Licht")), Vec3::Y * (top + 1.3))),
         spin: None,
+        door: None,
         height: 3.4,
         vents: Vec::new(),
     }
@@ -567,6 +570,7 @@ pub fn build_refinery(team: Team, meshes: &mut Assets<Mesh>) -> StructMeshes {
         lamps: Some(meshes.add(lamps.build().expect("Raffinerie-Fenster"))),
         head: None,
         spin: None,
+        door: None,
         height: 5.8,
         vents: vec![(ch + Vec3::Y * 5.55, true)],
     }
@@ -713,7 +717,108 @@ pub fn build_factory(team: Team, meshes: &mut Assets<Mesh>) -> StructMeshes {
         lamps: Some(meshes.add(lamps.build().expect("Fabrik-Fenster"))),
         head: None,
         spin: Some((meshes.add(fan.build().expect("Lüfter")), ac + Vec3::Y * 1.3)),
+        door: None,
         height: 6.6,
         vents,
+    }
+}
+
+// ================================================================ Mauern
+
+/// Betonmauerstück, 2 m lang entlang X, leicht geböscht, mit Kappe und Kennstreifen
+pub fn build_wall(team: Team, meshes: &mut Assets<Mesh>) -> StructMeshes {
+    let p = palette(team);
+    let concrete = lin(Color::srgb(0.52, 0.50, 0.47));
+    let concrete_dark = lin(Color::srgb(0.36, 0.35, 0.33));
+    let mut g = Geo::default();
+    let mut glow = Geo::default();
+    // etwas länger als 2 m, damit sich Nachbarstücke überlappen
+    let half = 1.03;
+    // Fundament im Boden
+    g.cuboid(Vec3::new(0.0, -0.4, 0.0), Vec3::new(2.06, 0.9, 1.1), Quat::IDENTITY, concrete_dark);
+    // Wandkörper: Querschnitt (z, y) unten breit, oben schmal
+    let prof = [Vec2::new(-0.45, 0.0), Vec2::new(0.45, 0.0), Vec2::new(0.3, 1.85), Vec2::new(-0.3, 1.85)];
+    g.extrude_x(&prof, -half, half, concrete);
+    // Kappe und Fuge in der Mitte
+    g.cuboid(Vec3::new(0.0, 1.9, 0.0), Vec3::new(2.06, 0.12, 0.72), Quat::IDENTITY, concrete_dark);
+    for side in [-1.0f32, 1.0] {
+        g.cuboid(Vec3::new(0.0, 0.9, side * 0.385), Vec3::new(0.04, 1.6, 0.03), Quat::from_rotation_x(side * -0.08), concrete_dark);
+        // Kennstreifen in Teamfarbe auf beiden Seiten
+        g.cuboid(Vec3::new(0.0, 1.55, side * 0.335), Vec3::new(2.0, 0.08, 0.02), Quat::from_rotation_x(side * -0.08), p.marking);
+        // Wasserablauf unten
+        g.cuboid(Vec3::new(0.5, 0.12, side * 0.45), Vec3::new(0.18, 0.1, 0.04), Quat::IDENTITY, p.steel_dark);
+    }
+    // kleine Positionsleuchte auf der Kappe
+    glow.cuboid(Vec3::new(-0.7, 1.97, 0.0), Vec3::new(0.08, 0.03, 0.08), Quat::IDENTITY, Vec3::ONE);
+    g.weather(p.dust, 0.9, 0.5);
+    StructMeshes {
+        body: meshes.add(g.build().expect("Mauer")),
+        glow: meshes.add(glow.build().expect("Mauer-Licht")),
+        glass: None,
+        lamps: None,
+        head: None,
+        spin: None,
+        door: None,
+        height: 2.2,
+        vents: Vec::new(),
+    }
+}
+
+/// Tor: zwei Pfeiler mit Leuchten, dazwischen ein Stahlflügel, der in den Boden fährt
+pub fn build_gate(team: Team, meshes: &mut Assets<Mesh>) -> StructMeshes {
+    let p = palette(team);
+    let concrete = lin(Color::srgb(0.52, 0.50, 0.47));
+    let concrete_dark = lin(Color::srgb(0.36, 0.35, 0.33));
+    let mut g = Geo::default();
+    let mut glow = Geo::default();
+    let px = 2.45;
+    for side in [-1.0f32, 1.0] {
+        let x = side * px;
+        g.cuboid(Vec3::new(x, -0.4, 0.0), Vec3::new(1.0, 0.9, 1.3), Quat::IDENTITY, concrete_dark);
+        g.extrude_y(&chamfered(0.8, 1.1, 0.12).into_iter().map(|v| v + Vec2::new(x, 0.0)).collect::<Vec<_>>(), 0.0, 2.5, 0.92, 0.0, concrete);
+        g.cuboid(Vec3::new(x, 2.56, 0.0), Vec3::new(0.86, 0.12, 1.16), Quat::IDENTITY, concrete_dark);
+        // Führungsschienen für den Flügel
+        g.cuboid(Vec3::new(x - side * 0.42, 1.1, 0.0), Vec3::new(0.08, 2.2, 0.36), Quat::IDENTITY, p.steel_dark);
+        // Warnstreifen und Kennung
+        g.cuboid(Vec3::new(x, 1.0, 0.56), Vec3::new(0.6, 0.5, 0.02), Quat::IDENTITY, lin(Color::srgb(0.78, 0.62, 0.12)));
+        g.cuboid(Vec3::new(x, 1.0, -0.56), Vec3::new(0.6, 0.5, 0.02), Quat::IDENTITY, lin(Color::srgb(0.78, 0.62, 0.12)));
+        g.cuboid(Vec3::new(x, 2.0, 0.555), Vec3::new(0.6, 0.12, 0.02), Quat::IDENTITY, p.marking);
+        g.cuboid(Vec3::new(x, 2.0, -0.555), Vec3::new(0.6, 0.12, 0.02), Quat::IDENTITY, p.marking);
+        // Signalleuchte oben
+        g.cyl(Vec3::new(x, 2.68, 0.0), 0.12, 0.12, Vec3::Y, 10, p.steel_dark);
+        glow.cyl(Vec3::new(x, 2.78, 0.0), 0.09, 0.1, Vec3::Y, 10, Vec3::ONE);
+    }
+    // Schwelle im Boden
+    g.cuboid(Vec3::new(0.0, 0.02, 0.0), Vec3::new(4.1, 0.05, 0.5), Quat::IDENTITY, p.steel_dark);
+    g.weather(p.dust, 1.0, 0.5);
+
+    // Flügel: Stahlplatte mit Rippen und Warnmuster, Ursprung am Boden
+    let mut d = Geo::default();
+    d.cuboid(Vec3::new(0.0, 1.0, 0.0), Vec3::new(4.0, 2.0, 0.22), Quat::IDENTITY, p.paint_dark);
+    for k in 0..5 {
+        let x = -1.6 + k as f32 * 0.8;
+        for side in [-1.0f32, 1.0] {
+            d.cuboid(Vec3::new(x, 1.0, side * 0.13), Vec3::new(0.08, 1.9, 0.05), Quat::IDENTITY, p.steel_dark);
+        }
+    }
+    for side in [-1.0f32, 1.0] {
+        d.cuboid(Vec3::new(0.0, 1.7, side * 0.12), Vec3::new(3.0, 0.14, 0.02), Quat::IDENTITY, p.marking);
+        // Warnmuster unten: gelb-schwarze Felder
+        for i in 0..10 {
+            let col = if i % 2 == 0 { lin(Color::srgb(0.78, 0.62, 0.12)) } else { lin(Color::srgb(0.06, 0.06, 0.06)) };
+            d.cuboid(Vec3::new(-1.8 + i as f32 * 0.4, 0.25, side * 0.12), Vec3::new(0.4, 0.3, 0.02), Quat::IDENTITY, col);
+        }
+    }
+    d.weather(p.dust, 1.0, 0.45);
+    StructMeshes {
+        body: meshes.add(g.build().expect("Tor")),
+        glow: meshes.add(glow.build().expect("Tor-Licht")),
+        glass: None,
+        lamps: None,
+        head: None,
+        spin: None,
+        door: Some(meshes.add(d.build().expect("Torflügel"))),
+        height: 3.0,
+        vents: Vec::new(),
     }
 }

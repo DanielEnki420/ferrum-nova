@@ -269,6 +269,10 @@ pub enum BuildingKind {
     Geschuetzturm,
     Raffinerie,
     Fabrik,
+    /// Mauerstück (2 m), wird als Linie gezogen
+    Mauer,
+    /// Tor in der Mauer: lässt nur eigene Einheiten durch
+    Tor,
 }
 
 impl BuildingKind {
@@ -280,6 +284,8 @@ impl BuildingKind {
             BuildingKind::Geschuetzturm => "Geschuetzturm",
             BuildingKind::Raffinerie => "Raffinerie",
             BuildingKind::Fabrik => "Fabrik",
+            BuildingKind::Mauer => "Mauer",
+            BuildingKind::Tor => "Tor",
         }
     }
     pub fn short_name(self) -> &'static str {
@@ -294,6 +300,8 @@ impl BuildingKind {
             BuildingKind::Geschuetzturm => [120, 40],
             BuildingKind::Raffinerie => [150, 0],
             BuildingKind::Fabrik => [200, 80],
+            BuildingKind::Mauer => [10, 0],
+            BuildingKind::Tor => [40, 0],
         }
     }
     pub fn build_time(self) -> f32 {
@@ -301,6 +309,8 @@ impl BuildingKind {
             BuildingKind::Geschuetzturm => 12.0,
             BuildingKind::Raffinerie => 15.0,
             BuildingKind::Fabrik => 20.0,
+            BuildingKind::Mauer => 3.0,
+            BuildingKind::Tor => 6.0,
         }
     }
     pub fn hp(self) -> f32 {
@@ -308,6 +318,8 @@ impl BuildingKind {
             BuildingKind::Geschuetzturm => 700.0,
             BuildingKind::Raffinerie => 900.0,
             BuildingKind::Fabrik => 1100.0,
+            BuildingKind::Mauer => 450.0,
+            BuildingKind::Tor => 650.0,
         }
     }
     /// Kollisionsradius
@@ -316,13 +328,27 @@ impl BuildingKind {
             BuildingKind::Geschuetzturm => 1.9,
             BuildingKind::Raffinerie => 3.3,
             BuildingKind::Fabrik => 3.9,
+            BuildingKind::Mauer => 1.2,
+            BuildingKind::Tor => 2.6,
         }
+    }
+    /// Mauer oder Tor
+    pub fn is_wall(self) -> bool {
+        matches!(self, BuildingKind::Mauer | BuildingKind::Tor)
     }
 }
 
 /// Ein gebautes Gebäude dieses Typs
 #[derive(Component)]
 pub struct Structure(pub BuildingKind);
+
+/// Mauerstück oder Tor: sperrt den Weg, wird nur auf Befehl oder beim Durchbruch angegriffen
+#[derive(Component)]
+pub struct Wall;
+
+/// Tor: eigene Einheiten fahren durch
+#[derive(Component)]
+pub struct Gate;
 
 /// Gebäude im Bau (Fortschritt 0..1). Es wächst aus dem Boden und ist noch ohne Funktion.
 #[derive(Component)]

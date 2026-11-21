@@ -355,7 +355,7 @@ pub fn enemy_ai(
     let turrets_wanted = if now < 80.0 { 0 } else { (1 + ((now - 80.0) / 70.0) as usize + recent_threat as usize).min(5) };
     let site_list: Vec<Site> = objs
         .iter()
-        .filter_map(|o| o.building.map(|b| Site { pos: o.pos, radius: b.0, team: o.team }))
+        .filter_map(|o| o.building.map(|b| Site { pos: o.pos, radius: b.0, team: o.team, wall: b.1.is_some_and(|k| k.is_wall()), gate: b.1 == Some(BuildingKind::Tor) }))
         .collect();
     let threatened_node = |p: Vec3| hostiles.iter().any(|(h, _)| flat(*h).distance(flat(p)) < 18.0);
     // Ausbaufeld: auf der eigenen Kartenhälfte, weit weg von jeder Abladestelle, sicher
@@ -415,7 +415,7 @@ pub fn enemy_ai(
     {
         if stock.can_afford(ENEMY, kind.cost()) {
             if let Some(pos) = find_spot(kind, target, ENEMY, &site_list, &node_pos) {
-                places.write(PlaceRequest { team: ENEMY, kind, pos });
+                places.write(PlaceRequest { team: ENEMY, kind, pos, rot: None });
                 ai.build_cd = 12.0;
             } else {
                 ai.build_cd = 20.0;

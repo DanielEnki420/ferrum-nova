@@ -14,6 +14,7 @@ mod hud;
 mod input;
 mod minimap;
 mod models;
+mod nav;
 mod orders;
 mod resources;
 mod sky;
@@ -61,6 +62,8 @@ fn main() {
         .init_resource::<input::ControlGroups>()
         .init_resource::<input::Hover>()
         .init_resource::<input::ClickMode>()
+        .init_resource::<nav::NavGrid>()
+        .init_resource::<nav::PathQueue>()
         .init_resource::<orders::Alerts>()
         .init_resource::<ai::AiState>()
         .init_resource::<construction::Placing>()
@@ -89,9 +92,11 @@ fn main() {
                 .chain(),
             (
                 units::snapshot,
+                nav::update_grid,
                 units::auto_target,
                 units::combat,
                 orders::follow_orders,
+                nav::plan_paths,
                 units::movement,
                 orders::face_on_arrival,
                 units::separation,
@@ -144,6 +149,7 @@ fn main() {
                 models::pulse_lights,
                 models::pulse_beacons,
                 buildings::spin,
+                construction::gate_doors,
                 resources::shrink_nodes,
                 resources::rise,
                 input::update_shadows,
