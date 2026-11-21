@@ -100,16 +100,20 @@ pub fn setup_camera(mut commands: Commands, mut images: ResMut<Assets<Image>>) {
         color_grading(),
         // dunkle Ränder lenken den Blick in die Bildmitte
         Vignette { intensity: 0.42, radius: 0.85, smoothness: 3.5, ..default() },
-        // Miniatur-Look: scharf am Blickpunkt, Vorder- und Hintergrund leicht unscharf
-        DepthOfField {
-            mode: DepthOfFieldMode::Gaussian,
-            focal_distance: 55.0,
-            aperture_f_stops: TILT_SHIFT_F_STOPS,
-            max_circle_of_confusion_diameter: 10.0,
-            max_depth: 600.0,
-            ..default()
-        },
+        depth_of_field(),
     ));
+}
+
+/// Miniatur-Look: scharf am Blickpunkt, Vorder- und Hintergrund leicht unscharf
+pub fn depth_of_field() -> DepthOfField {
+    DepthOfField {
+        mode: DepthOfFieldMode::Gaussian,
+        focal_distance: 55.0,
+        aperture_f_stops: TILT_SHIFT_F_STOPS,
+        max_circle_of_confusion_diameter: 10.0,
+        max_depth: 600.0,
+        ..default()
+    }
 }
 
 /// Blende für die Tiefenunschärfe (kleiner = unschärfer)

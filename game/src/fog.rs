@@ -128,7 +128,12 @@ pub fn update_fog(
     mut images: ResMut<Assets<Image>>,
     units: Query<(&Transform, &Team, &Unit)>,
     buildings: Query<(&Transform, &Team, &Building, Option<&Weapon>, Has<Wall>, Has<Construction>)>,
+    eclipse: Option<Res<crate::halkyon::Eclipse>>,
 ) {
+    // In der Halkyon-Finsternis sieht der Spieler weniger weit
+    let dark = eclipse.map_or(0.0, |e| e.shade);
+    let unit_k = 1.0 - crate::halkyon::UNIT_SIGHT_LOSS * dark;
+    let building_k = 1.0 - crate::halkyon::BUILDING_SIGHT_LOSS * dark;
     let dt = time.delta_secs();
     fog.timer -= dt;
     if fog.timer <= 0.0 || fog.fresh {
@@ -136,12 +141,12 @@ pub fn update_fog(
         fog.visible.iter_mut().for_each(|v| *v = false);
         for (t, team, u) in &units {
             if *team == PLAYER {
-                fog.reveal(t.translation, unit_sight(u.kind));
+                fog.reveal(t.translation, unit_sight(u.kind) * unit_k);
             }
         }
         for (t, team, b, w, wall, site) in &buildings {
             if *team == PLAYER {
-                fog.reveal(t.translation, building_sight(b, w, wall, site));
+                fog.reveal(t.translation, building_sight(b, w, wall, site) * building_k);
             }
         }
     }

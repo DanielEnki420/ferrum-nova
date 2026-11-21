@@ -6,6 +6,7 @@
 //! Im Browser startet der Ton erst nach dem ersten Klick (Autoplay-Regel, siehe index.html).
 
 use crate::components::*;
+use crate::era::Era;
 use crate::fx::FxEvent;
 use crate::input::CamRig;
 use bevy::audio::{AudioSink, AudioSinkPlayback, PlaybackMode, Volume};
@@ -165,29 +166,34 @@ pub(crate) fn storage_set(_key: &str, _value: &str) {
 #[derive(Resource)]
 pub struct Sounds {
     clips: Vec<Handle<AudioSource>>,
+    /// Fassung im Klang von 1996 (Zeitsprung, era.rs)
+    retro: Vec<Handle<AudioSource>>,
 }
 
 #[derive(Component)]
 pub struct Voice(Sfx);
 
+/// Musik eines Zeitalters; es spielt nur die des aktuellen
 #[derive(Component)]
-pub struct MusicTrack;
+pub struct MusicTrack(Era);
 
 const MUSIC_VOLUME: f32 = 0.32;
 
-pub fn setup_audio(mut commands: Commands, assets: Res<AssetServer>, prefs: Res<SoundPrefs>) {
-    let clips = Sfx::ALL.iter().map(|s| assets.load(format!("sounds/{}.ogg", s.file()))).collect();
-    commands.insert_resource(Sounds { clips });
-    commands.spawn((
-        AudioPlayer::new(assets.load("sounds/music.ogg")),
-        PlaybackSettings {
-            mode: PlaybackMode::Loop,
-            volume: Volume::Linear(MUSIC_VOLUME),
-            paused: !prefs.music,
-            ..default()
-        },
-        MusicTrack,
-    ));
+pub fn setup_audio(mut commands: Commands, assets: Res<AssetServer>, prefs: Res<SoundPrefs>, era: Res<Era>) {
+    let load = |dir: &str| Sfx::ALL.iter().map(|s| assets.load(format!("sounds/{dir}{}.ogg", s.file()))).collect();
+    commands.insert_resource(Sounds { clips: load(""), retro: load("retro/") });
+    for (track, file) in [(Era::Now, "sounds/music.ogg"), (Era::Retro, "sounds/retro/music.ogg")] {
+        commands.spawn((
+            AudioPlayer::new(assets.load(file)),
+            PlaybackSettings {
+                mode: PlaybackMode::Loop,
+                volume: Volume::Linear(MUSIC_VOLUME),
+                paused: !prefs.music || track != *era,
+                ..default()
+            },
+            MusicTrack(track),
+        ));
+    }
 }
 
 /// Effekt-Ereignisse in Geräusche übersetzen
@@ -278,6 +284,7 @@ pub fn play_sounds(
     time: Res<Time<Real>>,
     voices: Query<&Voice>,
     mut rng: ResMut<Rng>,
+    era: Res<Era>,
     mut last: Local<Vec<f32>>,
 ) {
     let Some(sounds) = sounds else { return };
@@ -316,19 +323,20 @@ pub fn play_sounds(
         total += 1;
         let speed = if r.sfx.positional() { rng.range(0.92, 1.08) } else { 1.0 };
         commands.spawn((
-            AudioPlayer::new(sounds.clips[i].clone()),
+            AudioPlayer::new(if *era == Era::Retro { &sounds.retro } else { &sounds.clips }[i].clone()),
             PlaybackSettings { mode: PlaybackMode::Despawn, volume: Volume::Linear(volume), speed, ..default() },
             Voice(r.sfx),
         ));
     }
 }
 
-/// Musik an/aus übernehmen und Einstellung speichern
-pub fn apply_prefs(prefs: Res<SoundPrefs>, music: Query<&AudioSink, With<MusicTrack>>, mut saved: Local<Option<SoundPrefs>>) {
-    if let Ok(sink) = music.single() {
-        if prefs.music && sink.is_paused() {
+/// Musik an/aus (und die des aktuellen Zeitalters) übernehmen und Einstellung speichern
+pub fn apply_prefs(prefs: Res<SoundPrefs>, era: Res<Era>, music: Query<(&AudioSink, &MusicTrack)>, mut saved: Local<Option<SoundPrefs>>) {
+    for (sink, track) in &music {
+        let on = prefs.music && track.0 == *era;
+        if on && sink.is_paused() {
             sink.play();
-        } else if !prefs.music && !sink.is_paused() {
+        } else if !on && !sink.is_paused() {
             sink.pause();
         }
     }

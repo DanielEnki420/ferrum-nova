@@ -11,9 +11,11 @@ mod buildings;
 mod campaign;
 mod components;
 mod construction;
+mod era;
 mod frame;
 mod fog;
 mod fx;
+mod halkyon;
 mod hud;
 mod input;
 mod minimap;
@@ -55,6 +57,8 @@ fn main() {
         }))
         .add_plugins(MaterialPlugin::<splat::TerrainMaterial>::default())
         .add_plugins(MaterialPlugin::<vegetation::WindMaterial>::default())
+        .add_plugins(UiMaterialPlugin::<era::RetroMaterial>::default())
+        .insert_resource(era::Era::load())
         .add_plugins(bevy::diagnostic::FrameTimeDiagnosticsPlugin::default())
         .insert_resource(ClearColor(input::HAZE))
         .insert_resource(bevy::light::DirectionalLightShadowMap { size: 4096 })
@@ -66,6 +70,7 @@ fn main() {
         .add_message::<audio::PlaySfx>()
         .init_resource::<frame::Phase>()
         .init_resource::<fog::FogGrid>()
+        .init_resource::<halkyon::Eclipse>()
         .init_resource::<frame::Stats>()
         .init_resource::<frame::HelpShown>()
         .init_resource::<frame::CampaignShown>()
@@ -86,7 +91,7 @@ fn main() {
         .add_message::<fx::FxEvent>()
         .add_systems(Startup, fog::setup_fog.before(world::setup_world).before(vegetation::setup_vegetation))
         .add_systems(Startup, (world::setup_world, input::setup_camera, hud::setup_hud, hud::setup_perf, minimap::setup_minimap, splat::load_terrain_textures, vegetation::setup_vegetation, atmo::setup_atmo, frame::setup_frame, frame::autostart, audio::setup_audio))
-        .add_systems(Startup, (campaign::setup_mission.after(world::setup_world), campaign::setup_mission_hud.after(hud::setup_hud)))
+        .add_systems(Startup, (campaign::setup_mission.after(world::setup_world), campaign::setup_mission_hud.after(hud::setup_hud), halkyon::setup_eclipse_hud.after(hud::setup_hud)))
         .add_systems(
             Update,
             ((
@@ -156,6 +161,7 @@ fn main() {
                 splat::finish_terrain,
             ),
         )
+        .add_systems(Update, ((era::era_keys, era::apply_era).chain(), (halkyon::update_eclipse, halkyon::eclipse_lights).chain().before(fog::update_fog)))
         // Optik: läuft auch nach Spielende weiter, damit Explosionen ausklingen
         .add_systems(
             Update,

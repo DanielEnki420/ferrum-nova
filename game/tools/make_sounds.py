@@ -2,7 +2,7 @@
 """Erzeugt alle Geräusche und die Musik von Ferrum Nova synthetisch (keine fremden Aufnahmen).
 
 Aufruf:  python3 tools/make_sounds.py
-Ergebnis: assets/sounds/*.ogg  (braucht ffmpeg zum Umwandeln von WAV nach Ogg Vorbis)
+Ergebnis: assets/sounds/*.ogg und assets/sounds/retro/*.ogg (1996-Fassung)  (braucht ffmpeg zum Umwandeln von WAV nach Ogg Vorbis)
 
 Nur Standardbibliothek: Schwingungen, Rauschen, einfache Filter und Hüllkurven.
 """
@@ -88,8 +88,7 @@ def normalize(out, peak=0.89, fade_out=True):
     return [s / m * peak for s in out]
 
 
-def save(name, out, quality=3):
-    os.makedirs(OUT, exist_ok=True)
+def write_ogg(dst, out, quality):
     with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as f:
         tmp = f.name
     with wave.open(tmp, "wb") as w:
@@ -97,12 +96,31 @@ def save(name, out, quality=3):
         w.setsampwidth(2)
         w.setframerate(SR)
         w.writeframes(b"".join(struct.pack("<h", int(max(-1, min(1, s)) * 32767)) for s in out))
-    dst = os.path.join(OUT, name + ".ogg")
     subprocess.run(
         ["ffmpeg", "-loglevel", "error", "-y", "-i", tmp, "-ac", "2", "-c:a", "vorbis", "-strict", "-2", "-q:a", str(quality), dst],
         check=True,
     )
     os.unlink(tmp)
+
+
+def crush(out, hold=3, levels=48):
+    """Klang einer Soundkarte von 1996: niedrige Abtastrate (Halteglied) und grobe Stufen"""
+    res = []
+    v = 0.0
+    for i, s in enumerate(out):
+        if i % hold == 0:
+            v = round(s * levels) / levels
+        res.append(v)
+    return res
+
+
+def save(name, out, quality=3, retro=True):
+    """Speichert den Klang; `retro` legt zusätzlich die 1996-Fassung in sounds/retro ab"""
+    os.makedirs(os.path.join(OUT, "retro"), exist_ok=True)
+    dst = os.path.join(OUT, name + ".ogg")
+    write_ogg(dst, out, quality)
+    if retro:
+        write_ogg(os.path.join(OUT, "retro", name + ".ogg"), crush(out), quality)
     print(f"{name:16s} {len(out) / SR:5.2f} s  {os.path.getsize(dst) // 1024:4d} KB")
 
 
@@ -282,7 +300,56 @@ def music():
     for i in range(n - L):
         k = i / (n - L)
         o[i] = o[i] * k + o[L + i] * (1 - k)
-    save("music", normalize(o[:L], 0.6, fade_out=False), quality=2)
+    save("music", normalize(o[:L], 0.6, fade_out=False), quality=2, retro=False)
+
+
+def pulse(o, start, dur, freq, gain, duty=0.5, env=lambda t: 1.0):
+    """Rechteckwelle wie aus einem Soundchip"""
+    n0 = int(start * SR)
+    phase = 0.0
+    for i in range(int(dur * SR)):
+        t = i / SR
+        phase = (phase + freq / SR) % 1.0
+        if n0 + i < len(o):
+            o[n0 + i] += (1.0 if phase < duty else -1.0) * gain * env(t)
+
+
+def music_retro():
+    """Dieselbe Akkordfolge als Chipmusik: Arpeggios, Rechteck-Bass, Rauschen als Schlagzeug"""
+    loop = 64.0
+    o = buf(loop)
+    chords = [(62, 65, 69), (58, 62, 65), (60, 65, 69), (60, 64, 67)] * 2
+    step = 1 / 16  # schnelle Arpeggios wie im Tracker
+    for i, ch in enumerate(chords):
+        t0 = i * 8.0
+        k = 0
+        t = t0
+        while t < t0 + 8.0 - 1e-6:
+            m = ch[k % 3] + (12 if (k // 3) % 2 else 0)
+            pulse(o, t, step, note(m), 0.07, 0.25, lambda x: 1.0 - x / step * 0.5)
+            t += step
+            k += 1
+        # Bass: Grundton in Achteln, auf und ab
+        for j in range(16):
+            m = ch[0] - 24 + (12 if j % 2 else 0)
+            pulse(o, t0 + j * 0.5, 0.42, note(m), 0.11, 0.5, decay(2.5, 0.003))
+    # Melodie: einfache Figur in D-Moll, jede zweite Runde
+    mel = [74, 72, 69, 72, 74, 77, 76, 72, 70, 69, 65, 67, 69, 67, 65, 62]
+    for r in (1, 3, 5, 7):
+        for j, m in enumerate(mel):
+            pulse(o, r * 8.0 + j * 0.5, 0.45, note(m), 0.06, 0.125, decay(1.6, 0.004))
+    # Schlagzeug: Rauschen kurz (Hi-Hat) und lang (Snare), tiefer Puls als Bass-Trommel
+    beat = 0.0
+    while beat < loop:
+        add_tone(o, beat, 0.2, sweep(140, 45, 25), decay(18), gain=0.35)
+        add_noise(o, beat + 0.5, 0.06, decay(60), lambda t: 9000, gain=0.12)
+        if int(beat) % 2 == 1:
+            add_noise(o, beat, 0.18, decay(18), lambda t: 5000, gain=0.25)
+        beat += 1.0
+    o = crush(o, 2, 64)
+    dst = os.path.join(OUT, "retro", "music.ogg")
+    write_ogg(dst, normalize(o, 0.55, fade_out=False), 2)
+    print(f"{'retro/music':16s} {loop:5.2f} s  {os.path.getsize(dst) // 1024:4d} KB")
 
 
 if __name__ == "__main__":
@@ -297,3 +364,4 @@ if __name__ == "__main__":
     interface()
     stings()
     music()
+    music_retro()

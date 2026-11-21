@@ -244,6 +244,8 @@ pub enum FrameButton {
     Menu,
     Sound,
     Music,
+    /// Zeitsprung 2026 / 1996
+    Era,
     /// Kampagnen-Auswahl ein-/ausblenden
     Campaign,
     /// Mission wählen (1-basiert)
@@ -344,6 +346,10 @@ fn sound_row() -> impl Bundle {
     )
 }
 
+fn era_row() -> impl Bundle {
+    (Node { flex_direction: FlexDirection::Row, ..default() }, children![toggle(FrameButton::Era, 280.0)])
+}
+
 /// Bildschirmfüllende, abgedunkelte Ebene mit einer Karte in der Mitte
 fn overlay(marker: impl Bundle, z: i32) -> impl Bundle {
     (
@@ -383,7 +389,7 @@ Rechtsklick: bewegen / angreifen   |   Strg: Angriffsmarsch   |   Alt: Patrouill
 L: Ein-Tasten-Modus (alles mit Linksklick, fuer Trackpads)
 R: Stopp   |   T: Stellung halten   |   F: ganze Armee   |   Strg + 1-9: Gruppe speichern
 Kamera: WASD / Pfeile / Mitteltaste / Wischen   |   Q / E drehen   |   Rad / Spreizen zoomen
-Leertaste: zum letzten Angriff   |   Pos1: zur Basis   |   P / Esc: Pause
+Leertaste: zum letzten Angriff   |   Pos1: zur Basis   |   P / Esc: Pause   |   Z: Zeitsprung 1996 / 2026
 Einheiten: X C V B N M (am HQ)   |   Gebaeude: G H J U K I";
 
 pub fn setup_frame(mut commands: Commands, cfg: Res<MatchConfig>) {
@@ -407,6 +413,7 @@ pub fn setup_frame(mut commands: Commands, cfg: Res<MatchConfig>) {
             (text(cfg.difficulty.hint(), 13.0, DIM), DiffHint, Node { margin: UiRect::bottom(px(16)), ..default() }),
             button(FrameButton::Help, "Steuerung", 280.0),
             sound_row(),
+            era_row(),
         ],
     )]));
 
@@ -420,6 +427,7 @@ pub fn setup_frame(mut commands: Commands, cfg: Res<MatchConfig>) {
             button(FrameButton::Again, "Neu beginnen", 260.0),
             button(FrameButton::Menu, "Hauptmenue", 260.0),
             sound_row(),
+            era_row(),
         ],
     )]));
 
@@ -536,13 +544,19 @@ pub fn frame_buttons(
     mut prefs: ResMut<SoundPrefs>,
     mut sfx: MessageWriter<PlaySfx>,
     mut campaign: ResMut<CampaignShown>,
+    mut era: ResMut<crate::era::Era>,
 ) {
     for (c, mut t) in &mut captions {
         let (name, on) = match c.0 {
             FrameButton::Sound => ("Ton", prefs.sfx),
+            FrameButton::Era => ("", false),
             _ => ("Musik", prefs.music),
         };
-        let want = format!("{name}: {}", if on { "an" } else { "aus" });
+        let want = if c.0 == FrameButton::Era {
+            format!("Zeitsprung (Z): {}", era.year())
+        } else {
+            format!("{name}: {}", if on { "an" } else { "aus" })
+        };
         if **t != want {
             **t = want;
         }
@@ -563,7 +577,8 @@ pub fn frame_buttons(
         }
         let on = matches!(b, FrameButton::Diff(d) if *d == cfg.difficulty) || (*b == FrameButton::Help && help.0)
             || (*b == FrameButton::Sound && prefs.sfx)
-            || (*b == FrameButton::Music && prefs.music);
+            || (*b == FrameButton::Music && prefs.music)
+            || (*b == FrameButton::Era && *era == crate::era::Era::Retro);
         *bg = if on { BTN_ON } else if over { BTN_HOVER } else { BTN }.into();
     }
     let Some(action) = action else { return };
@@ -589,6 +604,7 @@ pub fn frame_buttons(
         FrameButton::Menu => relaunch(&MatchConfig { autostart: false, mission: 0, ..cfg.clone() }),
         FrameButton::Sound => prefs.sfx = !prefs.sfx,
         FrameButton::Music => prefs.music = !prefs.music,
+        FrameButton::Era => *era = era.toggled(),
         FrameButton::Campaign => campaign.0 = !campaign.0,
         FrameButton::Mission(n) => relaunch(&MatchConfig { mission: n, autostart: false, ..cfg.clone() }),
         FrameButton::StartMission => {
