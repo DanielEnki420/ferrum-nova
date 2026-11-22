@@ -41,7 +41,7 @@ jobs:
       - name: Spiel bauen
         working-directory: game
         run: trunk build --release --dist ../site --public-url /ferrum-nova/
-      - uses: actions/upload-pages-artifact@v3
+      - uses: actions/upload-pages-artifact@v5
         with:
           path: site
 
