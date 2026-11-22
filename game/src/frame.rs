@@ -295,7 +295,7 @@ pub enum FrameButton {
     Music,
     /// VAARs Gedächtnis löschen (vaar.rs)
     ForgetVaar,
-    /// Zeitsprung 2026 / 1996
+    /// Zeitsprung 2026 / 2000 / 1996
     Era,
     /// Kampagnen-Auswahl ein-/ausblenden
     Campaign,
@@ -462,7 +462,7 @@ Rechtsklick: bewegen / angreifen   |   Strg: Angriffsmarsch   |   Alt: Patrouill
 L: Ein-Tasten-Modus (alles mit Linksklick, fuer Trackpads)
 R: Stopp   |   T: Stellung halten   |   F: ganze Armee   |   Strg + 1-9: Gruppe speichern
 Kamera: WASD / Pfeile / Mitteltaste / Wischen   |   Q / E drehen   |   Rad / Spreizen zoomen
-Leertaste: zum letzten Angriff   |   Pos1: zur Basis   |   P / Esc: Pause   |   Z: Zeitsprung 1996 / 2026
+Leertaste: zum letzten Angriff   |   Pos1: zur Basis   |   P / Esc: Pause   |   Z: Zeitsprung 2026 / 2000 / 1996
 Einheiten: X C V B N M (am HQ)   |   Gebaeude: G H J U K I";
 
 pub fn setup_frame(mut commands: Commands, cfg: Res<MatchConfig>) {
@@ -689,7 +689,7 @@ pub fn frame_buttons(
         let on = matches!(b, FrameButton::Diff(d) if *d == cfg.difficulty) || (*b == FrameButton::Help && help.0)
             || (*b == FrameButton::Sound && prefs.sfx)
             || (*b == FrameButton::Music && prefs.music)
-            || (*b == FrameButton::Era && *era == crate::era::Era::Retro);
+            || (*b == FrameButton::Era && *era != crate::era::Era::Now);
         *bg = if on { BTN_ON } else if over { BTN_HOVER } else { BTN }.into();
     }
     let Some(action) = action else { return };
@@ -715,7 +715,7 @@ pub fn frame_buttons(
         FrameButton::Menu => relaunch(&MatchConfig { autostart: false, mission: 0, duell: None, ..cfg.clone() }),
         FrameButton::Sound => prefs.sfx = !prefs.sfx,
         FrameButton::Music => prefs.music = !prefs.music,
-        FrameButton::Era => *era = era.toggled(),
+        FrameButton::Era => *era = era.next(),
         FrameButton::ForgetVaar => crate::vaar::forget(&mut vaar),
         FrameButton::Campaign => campaign.0 = !campaign.0,
         FrameButton::Mission(n) => relaunch(&MatchConfig { mission: n, autostart: false, ..cfg.clone() }),

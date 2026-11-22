@@ -1,8 +1,13 @@
 #!/usr/bin/env python3
 """Erzeugt alle Geräusche und die Musik von Ferrum Nova synthetisch (keine fremden Aufnahmen).
 
-Aufruf:  python3 tools/make_sounds.py
-Ergebnis: assets/sounds/*.ogg und assets/sounds/retro/*.ogg (1996-Fassung)  (braucht ffmpeg zum Umwandeln von WAV nach Ogg Vorbis)
+Aufruf:  python3 tools/make_sounds.py            alle Fassungen
+         python3 tools/make_sounds.py y2000      nur die 2000-Fassung (ebenso: now, retro)
+Ergebnis: assets/sounds/*.ogg, assets/sounds/y2000/*.ogg (2000-Fassung) und assets/sounds/retro/*.ogg
+(1996-Fassung)  (braucht ffmpeg zum Umwandeln von WAV nach Ogg Vorbis)
+
+Der Zufall ist fest geseedet; jede Fassung wird aus denselben Rohklängen abgeleitet, auch wenn nur
+eine davon geschrieben wird.
 
 Nur Standardbibliothek: Schwingungen, Rauschen, einfache Filter und Hüllkurven.
 """
@@ -12,6 +17,7 @@ import os
 import random
 import struct
 import subprocess
+import sys
 import tempfile
 import wave
 
@@ -19,6 +25,8 @@ SR = 22050
 TAU = 2 * math.pi
 OUT = os.path.join(os.path.dirname(__file__), "..", "assets", "sounds")
 rnd = random.Random(7)
+# Welche Fassungen geschrieben werden (Kommandozeile), sonst alle
+ONLY = set(sys.argv[1:]) or {"now", "y2000", "retro"}
 
 
 def buf(seconds):
@@ -114,14 +122,37 @@ def crush(out, hold=3, levels=48):
     return res
 
 
+def dull(out, cutoff=4200, room=0.12):
+    """Klang einer Soundkarte um 2000: 22 kHz / 16 Bit, Höhen gedämpft (zweifacher Tiefpass),
+    dazu ein kurzer, kleiner Raumhall wie bei den Hall-Effekten der damaligen Karten"""
+    a = lp_coeff(cutoff)
+    y1 = y2 = 0.0
+    res = []
+    for s in out:
+        y1 += a * (s - y1)
+        y2 += a * (y1 - y2)
+        res.append(y2)
+    if room > 0:
+        res = echo(res, 0.045, 0.25, room)
+    m = max(1e-9, max(abs(s) for s in out))
+    r = max(1e-9, max(abs(s) for s in res))
+    return [s / r * m for s in res]
+
+
+def put(variant, dst, out, quality):
+    if variant in ONLY:
+        os.makedirs(os.path.dirname(dst), exist_ok=True)
+        write_ogg(dst, out, quality)
+        print(f"{os.path.relpath(dst, OUT):24s} {len(out) / SR:5.2f} s  {os.path.getsize(dst) // 1024:4d} KB")
+
+
 def save(name, out, quality=3, retro=True):
-    """Speichert den Klang; `retro` legt zusätzlich die 1996-Fassung in sounds/retro ab"""
-    os.makedirs(os.path.join(OUT, "retro"), exist_ok=True)
-    dst = os.path.join(OUT, name + ".ogg")
-    write_ogg(dst, out, quality)
+    """Speichert den Klang; `retro` legt zusätzlich die Fassungen für 2000 (sounds/y2000) und
+    1996 (sounds/retro) ab"""
+    put("now", os.path.join(OUT, name + ".ogg"), out, quality)
     if retro:
-        write_ogg(os.path.join(OUT, "retro", name + ".ogg"), crush(out), quality)
-    print(f"{name:16s} {len(out) / SR:5.2f} s  {os.path.getsize(dst) // 1024:4d} KB")
+        put("y2000", os.path.join(OUT, "y2000", name + ".ogg"), dull(out), quality)
+        put("retro", os.path.join(OUT, "retro", name + ".ogg"), crush(out), quality)
 
 
 # ------------------------------------------------------------------ Waffen
@@ -347,9 +378,51 @@ def music_retro():
             add_noise(o, beat, 0.18, decay(18), lambda t: 5000, gain=0.25)
         beat += 1.0
     o = crush(o, 2, 64)
-    dst = os.path.join(OUT, "retro", "music.ogg")
-    write_ogg(dst, normalize(o, 0.55, fade_out=False), 2)
-    print(f"{'retro/music':16s} {loop:5.2f} s  {os.path.getsize(dst) // 1024:4d} KB")
+    put("retro", os.path.join(OUT, "retro", "music.ogg"), normalize(o, 0.55, fade_out=False), 2)
+
+
+def saw(o, start, dur, freq, gain, env=lambda t: 1.0, partials=8):
+    """Sägezahn mit wenigen Obertönen, wie ein einfacher Synthesizer-Klang einer Soundkarte"""
+    add_tone(o, start, dur, lambda t: freq, env, tuple((k, 1.0 / k) for k in range(1, partials + 1)), gain)
+
+
+def music_y2000():
+    """Dieselbe Akkordfolge als vereinfachte Musik um 2000: Synthesizer-Flächen, Sägezahn-Bass,
+    Schlagzeug-Schleife mit 120 BPM und eine schlichte Melodie, alles mit gedämpften Höhen"""
+    loop = 64.0
+    o = buf(loop)
+    chords = [(62, 65, 69), (58, 62, 65), (60, 65, 69), (60, 64, 67)] * 2
+    beat = 0.5  # 120 BPM
+    for i, ch in enumerate(chords):
+        t0 = i * 8.0
+        # Fläche: je Akkord ein gehaltener Klang mit weichem Ein- und Ausklang
+        env = lambda t: min(1.0, t / 0.6) * min(1.0, (8.0 - t) / 0.6)
+        for m in ch:
+            saw(o, t0, 8.0, note(m - 12), 0.045, env, partials=5)
+        # Bass: Grundton in Achteln, jede vierte Note eine Oktave höher
+        for j in range(32):
+            m = ch[0] - 24 + (12 if j % 4 == 3 else 0)
+            saw(o, t0 + j * beat / 2, beat / 2 * 0.9, note(m), 0.09, decay(5.0, 0.004), partials=6)
+    # Melodie: dieselbe Figur wie in der Chipmusik, aber halb so schnell und weicher
+    mel = [74, 72, 69, 72, 74, 77, 76, 72]
+    for r in (2, 3, 6, 7):
+        for j, m in enumerate(mel):
+            add_tone(o, r * 8.0 + j * 1.0, 0.95, lambda t, m=m: note(m), decay(2.2, 0.01), ((1, 1.0), (2, 0.25), (3, 0.3), (5, 0.1)), 0.07)
+    # Schlagzeug: Bass-Trommel auf 1 und 3, Snare auf 2 und 4, geschlossene Hi-Hat in Achteln
+    k = 0
+    t = 0.0
+    while t < loop - 1e-6:
+        if k % 2 == 0:
+            add_tone(o, t, 0.25, sweep(120, 45, 22), decay(14), gain=0.4)
+        else:
+            add_noise(o, t, 0.2, decay(20), lambda x: 4500, hp=300, gain=0.22)
+            add_tone(o, t, 0.12, sweep(220, 160, 30), decay(30), gain=0.12)
+        add_noise(o, t, 0.05, decay(70), lambda x: 9000, hp=5000, gain=0.07)
+        add_noise(o, t + beat / 2, 0.05, decay(70), lambda x: 9000, hp=5000, gain=0.05)
+        t += beat
+        k += 1
+    o = dull(o, cutoff=5500, room=0.15)
+    put("y2000", os.path.join(OUT, "y2000", "music.ogg"), normalize(o, 0.55, fade_out=False), 2)
 
 
 if __name__ == "__main__":
@@ -365,3 +438,4 @@ if __name__ == "__main__":
     stings()
     music()
     music_retro()
+    music_y2000()

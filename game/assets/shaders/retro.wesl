@@ -1,5 +1,8 @@
-// Ferrum Nova – Zeitsprung 1996: kleines Bild mit harten Pixeln, feste 32-Farben-Palette mit
-// geordnetem Dithering (Bayer 4x4), Röhren-Zeilen und dunkle Bildränder.
+// Ferrum Nova – Zeitsprung (params.w wählt die Darstellung):
+// 1996: kleines Bild mit harten Pixeln, feste 32-Farben-Palette mit geordnetem Dithering
+//       (Bayer 4x4), Röhren-Zeilen und dunkle Bildränder.
+// 2000: 480 Zeilen, weich hochgerechnet, 16 Bit Farbtiefe (RGB565) mit feinem 4x4-Dithering,
+//       dadurch sichtbare Farbstufen; kaum dunkle Ränder.
 
 import bevy_ui_render::ui_vertex_output::UiVertexOutput;
 
@@ -33,8 +36,37 @@ fn to_linear(c: vec3<f32>) -> vec3<f32> {
     return select(hi, lo, c <= vec3(0.04045));
 }
 
+// Ein Bildpunkt so, wie ihn eine 16-Bit-Grafikkarte im Bildspeicher ablegt (sRGB, 5/6/5 Bit)
+fn texel_565(p: vec2<i32>, size: vec2<i32>) -> vec3<f32> {
+    let q = clamp(p, vec2(0), size - 1);
+    let lin = textureLoad(screen_tex, q, 0).rgb;
+    let c = to_srgb(clamp(lin, vec3(0.0), vec3(1.0)));
+    var bayer = BAYER;
+    let d = (bayer[u32(q.y % 4) * 4u + u32(q.x % 4)] + 0.5) / 16.0 - 0.5;
+    let steps = vec3(31.0, 63.0, 31.0);
+    return clamp(floor(c * steps + 0.5 + d), vec3(0.0), steps) / steps;
+}
+
+fn fragment_2000(in: UiVertexOutput) -> vec4<f32> {
+    let size = params.xy;
+    let isize = vec2<i32>(size);
+    // Bilineare Hochrechnung zwischen den bereits auf 16 Bit gebrachten Bildpunkten
+    let px = in.uv * size - 0.5;
+    let base = vec2<i32>(floor(px));
+    let f = fract(px);
+    let a = mix(texel_565(base, isize), texel_565(base + vec2(1, 0), isize), f.x);
+    let b = mix(texel_565(base + vec2(0, 1), isize), texel_565(base + vec2(1, 1), isize), f.x);
+    let c = mix(a, b, f.y);
+    let q = in.uv - 0.5;
+    let vignette = 1.0 - dot(q, q) * 0.18;
+    return vec4(to_linear(clamp(c * vignette, vec3(0.0), vec3(1.0))), 1.0);
+}
+
 @fragment
 fn fragment(in: UiVertexOutput) -> @location(0) vec4<f32> {
+    if params.w > 0.5 {
+        return fragment_2000(in);
+    }
     let size = params.xy;
     let px = in.uv * size;
     let cell = min(floor(px), size - 1.0);

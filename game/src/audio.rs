@@ -166,8 +166,20 @@ pub(crate) fn storage_set(_key: &str, _value: &str) {
 #[derive(Resource)]
 pub struct Sounds {
     clips: Vec<Handle<AudioSource>>,
-    /// Fassung im Klang von 1996 (Zeitsprung, era.rs)
+    /// Fassung im Klang von 2000 (Zeitsprung, era.rs)
+    y2000: Vec<Handle<AudioSource>>,
+    /// Fassung im Klang von 1996
     retro: Vec<Handle<AudioSource>>,
+}
+
+impl Sounds {
+    fn bank(&self, era: Era) -> &[Handle<AudioSource>] {
+        match era {
+            Era::Now => &self.clips,
+            Era::Y2000 => &self.y2000,
+            Era::Retro => &self.retro,
+        }
+    }
 }
 
 #[derive(Component)]
@@ -181,8 +193,9 @@ const MUSIC_VOLUME: f32 = 0.32;
 
 pub fn setup_audio(mut commands: Commands, assets: Res<AssetServer>, prefs: Res<SoundPrefs>, era: Res<Era>) {
     let load = |dir: &str| Sfx::ALL.iter().map(|s| assets.load(format!("sounds/{dir}{}.ogg", s.file()))).collect();
-    commands.insert_resource(Sounds { clips: load(""), retro: load("retro/") });
-    for (track, file) in [(Era::Now, "sounds/music.ogg"), (Era::Retro, "sounds/retro/music.ogg")] {
+    commands.insert_resource(Sounds { clips: load(""), y2000: load("y2000/"), retro: load("retro/") });
+    let tracks = [(Era::Now, "sounds/music.ogg"), (Era::Y2000, "sounds/y2000/music.ogg"), (Era::Retro, "sounds/retro/music.ogg")];
+    for (track, file) in tracks {
         commands.spawn((
             AudioPlayer::new(assets.load(file)),
             PlaybackSettings {
@@ -323,7 +336,7 @@ pub fn play_sounds(
         total += 1;
         let speed = if r.sfx.positional() { rng.range(0.92, 1.08) } else { 1.0 };
         commands.spawn((
-            AudioPlayer::new(if *era == Era::Retro { &sounds.retro } else { &sounds.clips }[i].clone()),
+            AudioPlayer::new(sounds.bank(*era)[i].clone()),
             PlaybackSettings { mode: PlaybackMode::Despawn, volume: Volume::Linear(volume), speed, ..default() },
             Voice(r.sfx),
         ));
