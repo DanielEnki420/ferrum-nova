@@ -439,8 +439,8 @@ fn scout_explores_and_remembers() {
 /// Ganze Partie im Zeitraffer (bis 15 Minuten) gegen einen Spieler, der sich nur mit vier
 /// Geschütztürmen verteidigt: Die KI baut ihre Wirtschaft aus, erkundet,
 /// greift in Wellen an und setzt der Spielerbasis zu
-#[test]
-fn full_match_ai_builds_up_and_attacks() {
+/// Partie gegen einen Spieler, der nur seine Startarmee und vier Geschütztürme hat
+fn match_app(diff: Option<crate::frame::Difficulty>) -> App {
     use crate::fx::{update_collapse, FxKit};
     use crate::units::{auto_target, check_outcome, combat, deaths, production, projectiles};
     use crate::world::spawn_unit;
@@ -486,6 +486,63 @@ fn full_match_ai_builds_up_and_attacks() {
     });
     app.world_mut().flush();
 
+    if let Some(d) = diff {
+        let (first, wave) = d.first_attack();
+        let mut ai = app.world_mut().resource_mut::<AiState>();
+        ai.next_attack = first;
+        ai.wave_size = wave;
+        ai.pace = d.pace();
+        app.insert_resource(crate::frame::MatchConfig { difficulty: d, ..default() });
+    }
+    app
+}
+
+/// Vergleich der Schwierigkeitsstufen (zum Abstimmen, läuft nur auf Wunsch):
+/// `cargo test --release difficulty_pressure -- --ignored --nocapture`
+#[test]
+#[ignore]
+fn difficulty_pressure() {
+    use crate::frame::Difficulty;
+    for d in Difficulty::ALL {
+        let mut app = match_app(Some(d));
+        let (mut first_wave, mut waves, mut was_wave, mut army10) = (None, 0, false, 0);
+        for step in 0..9000 {
+            app.update();
+            if step % 10 != 0 {
+                continue;
+            }
+            let world = app.world_mut();
+            let now = world.resource::<AiState>().elapsed;
+            let has_wave = world.resource::<AiState>().wave.is_some();
+            if has_wave && !was_wave {
+                waves += 1;
+                first_wave.get_or_insert(now);
+            }
+            was_wave = has_wave;
+            if step == 6000 {
+                let mut q = world.query::<(&Team, &Unit)>();
+                army10 = q.iter(world).filter(|(t, u)| **t == ENEMY && u.kind != UnitKind::Sammler).count();
+            }
+            if *world.resource::<Outcome>() != Outcome::Running {
+                break;
+            }
+        }
+        let world = app.world_mut();
+        let mut hq = world.query::<(&Team, &Health, &Hq)>();
+        let player_hq = hq.iter(world).find(|(t, ..)| **t == PLAYER).map(|(_, h, _)| h.hp / h.max);
+        let min = world.resource::<AiState>().elapsed / 60.0;
+        let outcome = *world.resource::<Outcome>();
+        println!(
+            "{:7} erste Welle {:>5.0} s, Wellen {waves:>2}, Armee nach 10 min {army10:>2}, nach {min:.1} min {outcome:?}, Spieler-HQ {player_hq:?}",
+            d.name(),
+            first_wave.unwrap_or(-1.0),
+        );
+    }
+}
+
+#[test]
+fn full_match_ai_builds_up_and_attacks() {
+    let mut app = match_app(None);
     let (mut waves, mut max_harv, mut was_wave) = (0, 0, false);
     let mut kinds_built = std::collections::HashSet::new();
     for step in 0..9000 {

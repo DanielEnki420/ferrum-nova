@@ -123,7 +123,7 @@ pub fn tick_clock(
     eclipse.shade = shade_at(t);
     if until_next(before) > 0.0 && until_next(t) == 0.0 {
         sfx.write(PlaySfx::ui(Sfx::Alert));
-        if !rules.is_some_and(|r| r.duel) && ai.wave.is_none() && ai.next_attack - ai.elapsed < 120.0 {
+        if !rules.is_some_and(|r| r.duel) && ai.pace.eclipse_rush && ai.wave.is_none() && ai.next_attack - ai.elapsed < 120.0 {
             ai.next_attack = ai.elapsed + DUSK * 0.6;
         }
     }

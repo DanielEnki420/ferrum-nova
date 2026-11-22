@@ -41,25 +41,42 @@ impl Difficulty {
     }
     fn hint(self) -> &'static str {
         match self {
-            Difficulty::Leicht => "Der Gegner sammelt langsamer und greift spaet an.",
-            Difficulty::Normal => "Ausgewogen.",
+            Difficulty::Leicht => "Zum Kennenlernen: Der Gegner sammelt langsam, greift spaet und mit kleinen Wellen an.",
+            Difficulty::Normal => "Ausgewogen: genug Zeit zum Aufbauen, dann wachsender Druck.",
             Difficulty::Schwer => "Der Gegner sammelt schneller und greift frueh an.",
         }
     }
     /// Faktor auf jede Ladung, die die Gegner-KI abliefert
     pub fn ai_income(self) -> f32 {
         match self {
-            Difficulty::Leicht => 0.7,
-            Difficulty::Normal => 1.0,
+            Difficulty::Leicht => 0.5,
+            Difficulty::Normal => 0.8,
             Difficulty::Schwer => 1.35,
         }
     }
-    /// Erster Angriff (Sekunden) und Größe der ersten Welle
-    fn first_attack(self) -> (f32, usize) {
+    /// Faktor auf den Schaden der Gegner-Waffen
+    pub fn ai_damage(self) -> f32 {
         match self {
-            Difficulty::Leicht => (240.0, 4),
-            Difficulty::Normal => (150.0, 5),
+            Difficulty::Leicht => 0.7,
+            Difficulty::Normal => 0.85,
+            Difficulty::Schwer => 1.0,
+        }
+    }
+    /// Erster Angriff (Sekunden) und Größe der ersten Welle
+    pub fn first_attack(self) -> (f32, usize) {
+        match self {
+            Difficulty::Leicht => (360.0, 3),
+            Difficulty::Normal => (240.0, 4),
             Difficulty::Schwer => (110.0, 6),
+        }
+    }
+    /// Wie schnell die Wellen wachsen, Pausen dazwischen, Bautempo, Angriff in der Finsternis
+    pub fn pace(self) -> crate::ai::AiPace {
+        use crate::ai::AiPace;
+        match self {
+            Difficulty::Leicht => AiPace { wave_step: 1, wave_max: 7, pause: 2.0, build: 1.6, eclipse_rush: false, army_max: 9, wave_extra: 1 },
+            Difficulty::Normal => AiPace { wave_step: 1, wave_max: 11, pause: 1.4, build: 1.2, eclipse_rush: true, army_max: 16, wave_extra: 2 },
+            Difficulty::Schwer => AiPace::default(),
         }
     }
 }
@@ -630,6 +647,7 @@ fn begin(cfg: &MatchConfig, ai: &mut AiState, phase: &mut Phase) {
     let (first, wave) = cfg.difficulty.first_attack();
     ai.next_attack = first * crate::campaign::current(cfg).map_or(1.0, |m| m.attack_delay);
     ai.wave_size = wave;
+    ai.pace = cfg.difficulty.pace();
     *phase = Phase::Playing;
 }
 

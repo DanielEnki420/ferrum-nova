@@ -138,8 +138,11 @@ pub fn combat(
     kit: Res<ModelKit>,
     mut fx: MessageWriter<FxEvent>,
     mut q: Query<(Entity, &mut Weapon, &AttackTarget, &Team, &Transform, Option<&Unit>, Option<&mut Motion>, Option<&Structure>), Without<Construction>>,
+    (cfg, rules): (Option<Res<crate::frame::MatchConfig>>, Option<Res<crate::sim::SimRules>>),
 ) {
     let dt = time.delta_secs();
+    // Schwierigkeit: Waffen der Gegner-KI treffen schwächer oder voll (nicht im Duell)
+    let ai_damage = if rules.is_some_and(|r| r.duel) { 1.0 } else { cfg.map_or(1.0, |c| c.difficulty.ai_damage()) };
     for (e, mut w, target, team, t, unit, motion, structure) in &mut q {
         w.timer = (w.timer - dt).max(0.0);
         let Some(tgt) = snap.get(&target.0) else {
@@ -189,7 +192,7 @@ pub fn combat(
             NotShadowCaster,
             Projectile {
                 target: target.0,
-                damage: w.damage,
+                damage: if *team == ENEMY { w.damage * ai_damage } else { w.damage },
                 speed: w.projectile_speed,
                 rocket: w.rocket,
                 smoke_timer: 0.0,

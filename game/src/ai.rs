@@ -101,6 +101,32 @@ pub struct AiState {
     pub last_threat: f32,
     pub threat_dir: Option<Vec3>,
     pub scout_leg: usize,
+    /// Tempo je Schwierigkeit (frame.rs, `Difficulty::pace`)
+    pub pace: AiPace,
+}
+
+/// Wie schnell die Gegner-KI Druck aufbaut
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct AiPace {
+    /// So viele Einheiten mehr hat jede weitere Welle, höchstens `wave_max`
+    pub wave_step: usize,
+    pub wave_max: usize,
+    /// Faktor auf die Pausen zwischen den Wellen
+    pub pause: f32,
+    /// Faktor auf die Wartezeit zwischen zwei Gebäuden
+    pub build: f32,
+    /// Nutzt die Halkyon-Finsternis für einen vorgezogenen Angriff
+    pub eclipse_rush: bool,
+    /// Höchstens so viele Kampfeinheiten (Verteidigung gegen einen Angriff ausgenommen)
+    pub army_max: usize,
+    /// Zusätzliche Einheiten über die Wellengröße hinaus, die mitfahren dürfen
+    pub wave_extra: usize,
+}
+
+impl Default for AiPace {
+    fn default() -> Self {
+        AiPace { wave_step: 2, wave_max: 16, pause: 1.0, build: 1.0, eclipse_rush: true, army_max: usize::MAX, wave_extra: 4 }
+    }
 }
 
 impl Default for AiState {
@@ -118,6 +144,7 @@ impl Default for AiState {
             last_threat: -999.0,
             threat_dir: None,
             scout_leg: 0,
+            pace: AiPace::default(),
         }
     }
 }
@@ -434,9 +461,9 @@ pub fn enemy_ai(
         if stock.can_afford(ENEMY, kind.cost()) {
             if let Some(pos) = find_spot(kind, target, ENEMY, &site_list, &node_pos) {
                 places.write(PlaceRequest { team: ENEMY, kind, pos, rot: None });
-                ai.build_cd = 12.0;
+                ai.build_cd = 12.0 * ai.pace.build;
             } else {
-                ai.build_cd = 20.0;
+                ai.build_cd = 20.0 * ai.pace.build;
             }
         } else {
             saving = true;
@@ -457,7 +484,12 @@ pub fn enemy_ai(
         } else {
             choose_unit(&own, &seenf, turrets_seen, factory_ready)
         };
-        builds.write(BuildRequest { team: ENEMY, kind });
+        // Obergrenze der Armee je Schwierigkeit, außer die Basis wird gerade angegriffen
+        let army: usize = own.iter().sum::<usize>() - harv_count;
+        let capped = kind != UnitKind::Sammler && army >= ai.pace.army_max && ai.threat.is_none();
+        if !capped {
+            builds.write(BuildRequest { team: ENEMY, kind });
+        }
     }
 
     // ------------------------------------------------------------ Sammler
@@ -554,7 +586,7 @@ pub fn enemy_ai(
             for e in w.members {
                 commands.entity(e).insert(AiRole::Defend);
             }
-            ai.next_attack = now + 30.0;
+            ai.next_attack = now + 30.0 * ai.pace.pause;
         }
         for o in &combat {
             let role = role_of(o.e);
@@ -581,7 +613,7 @@ pub fn enemy_ai(
     }
     if ai.wave.as_ref().is_some_and(|w| w.members.is_empty()) {
         ai.wave = None;
-        ai.next_attack = now + 40.0;
+        ai.next_attack = now + 40.0 * ai.pace.pause;
     }
     if ai.wave.is_none() && now >= ai.next_attack && ai.threat.is_none() {
         let ready: Vec<&Obj> = combat
@@ -593,7 +625,7 @@ pub fn enemy_ai(
         if ready.len() >= ai.wave_size {
             // nicht alles schicken: der Rest bleibt als Reserve zur Verteidigung
             let mut ready = ready;
-            ready.truncate(ai.wave_size + 4);
+            ready.truncate(ai.wave_size + ai.pace.wave_extra);
             let artillery = ready.iter().any(|o| o.unit == Some(UnitKind::Haubitze));
             let target = pick_target(&ai.intel, artillery);
             let start_value = ready.iter().map(|o| o.unit.map_or(0.0, value) * o.hp).sum();
@@ -601,7 +633,7 @@ pub fn enemy_ai(
                 commands.entity(o.e).insert(AiRole::Wave);
             }
             ai.wave = Some(Wave { members: ready.iter().map(|o| o.e).collect(), phase: WavePhase::Gather, target, start_value, timer: 0.0 });
-            ai.wave_size = (ai.wave_size + 2).min(16);
+            ai.wave_size = (ai.wave_size + ai.pace.wave_step).min(ai.pace.wave_max.max(ai.wave_size));
         }
     }
     let intel = ai.intel.clone();
@@ -655,7 +687,7 @@ pub fn enemy_ai(
     }
     if disband {
         ai.wave = None;
-        ai.next_attack = now + 45.0;
+        ai.next_attack = now + 45.0 * ai.pace.pause;
     }
 }
 

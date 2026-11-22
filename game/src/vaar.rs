@@ -96,8 +96,9 @@ impl VaarMemory {
 
     fn set_strength(&mut self, d: Difficulty) {
         let base = match d {
-            Difficulty::Leicht => 0.5,
-            Difficulty::Normal | Difficulty::Schwer => 1.0,
+            Difficulty::Leicht => 0.4,
+            Difficulty::Normal => 0.75,
+            Difficulty::Schwer => 1.0,
         };
         // Gnade: nach drei Niederlagen in Folge passt sich VAAR kaum noch an
         let streak = if self.loss_streak >= 3 { 0.4 } else { 1.0 };
@@ -487,6 +488,8 @@ mod tests {
         assert!(m.strength < 0.5 && !m.expects_rush(), "Gnade nach drei Niederlagen");
         m.learn(&lesson(5.0, 0.0, true));
         m.set_strength(Difficulty::Normal);
+        assert_eq!(m.strength, 0.75);
+        m.set_strength(Difficulty::Schwer);
         assert_eq!(m.strength, 1.0);
         m.set_strength(Difficulty::Leicht);
         assert!(m.prior(0)[UnitKind::Panzer.idx()] < 2.5);
