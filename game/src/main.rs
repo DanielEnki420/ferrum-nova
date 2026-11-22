@@ -41,6 +41,7 @@ use components::*;
 
 fn main() {
     let config = frame::MatchConfig::load();
+    let low_mem = low_memory_mode();
     let mut app = App::new();
     app
         .set_error_handler(bevy::ecs::error::warn)
@@ -70,9 +71,10 @@ fn main() {
         .add_plugins(MaterialPlugin::<vegetation::WindMaterial>::default())
         .add_plugins(UiMaterialPlugin::<era::RetroMaterial>::default())
         .insert_resource(era::Era::load())
+        .insert_resource(era::LowMem(low_mem))
         .add_plugins(bevy::diagnostic::FrameTimeDiagnosticsPlugin::default())
         .insert_resource(ClearColor(input::HAZE))
-        .insert_resource(bevy::light::DirectionalLightShadowMap { size: 4096 })
+        .insert_resource(bevy::light::DirectionalLightShadowMap { size: if low_mem { 2048 } else { 4096 } })
         .insert_resource(Rng(0x2545_F491_4F6C_DD1D))
         .insert_resource(Stock([[200, 50], [200, 50]]))
         .init_resource::<Outcome>()
@@ -191,4 +193,27 @@ fn main() {
     sim::add_sim(&mut app);
     net::connect(&mut app);
     app.run();
+}
+
+/// Speichersparmodus (siehe `era::LowMem`): in Safari, das die Seite bei hohem Speicherverbrauch
+/// neu lädt (nicht Chrome/Edge/Firefox, die sich teils auch "Safari" nennen). Mit `?spar=1` bzw.
+/// `?spar=0` in der Adresse lässt er sich in jedem Browser ein- oder ausschalten.
+fn low_memory_mode() -> bool {
+    #[cfg(target_arch = "wasm32")]
+    {
+        let Some(win) = web_sys::window() else { return false };
+        let search = win.location().search().unwrap_or_default();
+        if search.contains("spar=1") {
+            return true;
+        }
+        if search.contains("spar=0") {
+            return false;
+        }
+        let ua = win.navigator().user_agent().ok().unwrap_or_default();
+        ua.contains("Safari") && !["Chrome", "Chromium", "CriOS", "FxiOS", "Edg", "Android"].iter().any(|x| ua.contains(x))
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        false
+    }
 }

@@ -1,6 +1,7 @@
 // Ferrum Nova – Zeitsprung (params.w wählt die Darstellung):
 // 1996: kleines Bild mit harten Pixeln, feste 32-Farben-Palette mit geordnetem Dithering
 //       (Bayer 4x4), Röhren-Zeilen und dunkle Bildränder.
+// 2026 sparsam (params.w = 2): einfache Auflösung, weich hochgerechnet (Safari, ?spar=1).
 // 2000: 480 Zeilen, weich hochgerechnet, 16 Bit Farbtiefe (RGB565) mit feinem 4x4-Dithering,
 //       dadurch sichtbare Farbstufen; kaum dunkle Ränder.
 
@@ -62,8 +63,19 @@ fn fragment_2000(in: UiVertexOutput) -> vec4<f32> {
     return vec4(to_linear(clamp(c * vignette, vec3(0.0), vec3(1.0))), 1.0);
 }
 
+// 2026 im Speichersparmodus: Bild in einfacher Auflösung weich hochrechnen, dunkle Ränder wie sonst
+fn fragment_2026(in: UiVertexOutput) -> vec4<f32> {
+    let lin = textureSampleLevel(screen_tex, screen_sampler, in.uv, 0.0).rgb;
+    let d = length(in.uv - 0.5) * 1.414;
+    let shade = mix(1.0, 0.6, smoothstep(0.45, 1.15, d));
+    return vec4(lin * shade, 1.0);
+}
+
 @fragment
 fn fragment(in: UiVertexOutput) -> @location(0) vec4<f32> {
+    if params.w > 1.5 {
+        return fragment_2026(in);
+    }
     if params.w > 0.5 {
         return fragment_2000(in);
     }

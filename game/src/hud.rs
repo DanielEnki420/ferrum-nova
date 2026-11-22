@@ -409,6 +409,7 @@ pub fn update_perf(
     mut panel: Query<(&mut Visibility, &Children), With<PerfText>>,
     mut texts: Query<&mut Text>,
     entities: Query<Entity>,
+    assets: (Res<Assets<Mesh>>, Res<Assets<StandardMaterial>>, Res<Assets<Image>>),
     time: Res<Time>,
     mut timer: Local<f32>,
 ) {
@@ -427,7 +428,18 @@ pub fn update_perf(
     if let Some(&c) = children.first()
         && let Ok(mut t) = texts.get_mut(c)
     {
-        t.0 = format!("{fps:.0} FPS | {ms:.1} ms | {} Objekte", entities.iter().count());
+        // Speicher im Blick behalten (Safari lädt die Seite bei zu viel Verbrauch neu)
+        #[cfg(target_arch = "wasm32")]
+        let ram = format!(" | RAM {} MB", core::arch::wasm32::memory_size::<0>() * 64 / 1024);
+        #[cfg(not(target_arch = "wasm32"))]
+        let ram = String::new();
+        t.0 = format!(
+            "{fps:.0} FPS | {ms:.1} ms | {} Objekte | Meshes {} Mat {} Bilder {}{ram}",
+            entities.iter().count(),
+            assets.0.len(),
+            assets.1.len(),
+            assets.2.len()
+        );
     }
 }
 

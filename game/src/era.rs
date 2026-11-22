@@ -18,6 +18,7 @@ use bevy::anti_alias::smaa::Smaa;
 use bevy::camera::{ImageRenderTarget, RenderTarget};
 use bevy::image::ImageSampler;
 use bevy::input::keyboard::Key;
+use bevy::post_process::bloom::Bloom;
 use bevy::post_process::dof::DepthOfField;
 use bevy::post_process::effect_stack::Vignette;
 use bevy::prelude::*;
@@ -83,9 +84,15 @@ impl Era {
     }
 }
 
+/// Speichersparmodus (Safari oder `?spar=1`): 2026 in einfacher statt Retina-Auflösung zeichnen
+/// und hochrechnen, ohne Bloom und Schärfentiefe. Alle Bildpuffer brauchen dann nur ein Viertel des
+/// Grafikspeichers; die Oberfläche bleibt scharf.
+#[derive(Resource, Clone, Copy)]
+pub struct LowMem(pub bool);
+
 #[derive(Asset, TypePath, AsBindGroup, Clone, Debug)]
 pub struct RetroMaterial {
-    /// x, y: Bildgröße in Pixeln, z: Zeit (s), w: Darstellung (0 = 1996, 1 = 2000)
+    /// x, y: Bildgröße in Pixeln, z: Zeit (s), w: Darstellung (0 = 1996, 1 = 2000, 2 = 2026 sparsam)
     #[uniform(0)]
     pub params: Vec4,
     #[texture(1)]
@@ -139,6 +146,7 @@ pub fn apply_era(
     mut mats: ResMut<Assets<RetroMaterial>>,
     mut main_cam: Query<(Entity, &mut Projection), With<MainCamera>>,
     retro: Query<Entity, Or<(With<RetroCamera>, With<RetroScreen>)>>,
+    low: Res<LowMem>,
     mut view: Local<Option<(Handle<Image>, Handle<RetroMaterial>, UVec2, f32, Era)>>,
     mut applied: Local<Option<Era>>,
 ) {
@@ -147,7 +155,10 @@ pub fn apply_era(
     if applied.is_some_and(|a| a != *era) || applied.is_none() {
         storage_set(STORAGE_KEY, era.year());
     }
-    let Some(lines) = era.lines() else {
+    // im Sparmodus läuft auch 2026 über das kleinere Bild, in einfacher Auflösung
+    let lines = era.lines().or((low.0 && *era == Era::Now).then(|| win.height().round().max(1.0)));
+    let mode = if *era == Era::Now { 2.0 } else { era.shader_mode() };
+    let Some(lines) = lines else {
         if *applied != Some(Era::Now) {
             for e in &retro {
                 commands.entity(e).despawn();
@@ -169,15 +180,18 @@ pub fn apply_era(
     };
     let size = retro_size(win, lines);
     let scale = size.y as f32 / win.height().max(1.0);
-    // Anzeige-Kamera und Fläche fehlen nur, wenn vorher 2026 lief
-    let fresh = applied.is_none_or(|a| a == Era::Now);
+    // Anzeige-Kamera und Fläche fehlen nur, wenn vorher 2026 in voller Auflösung lief
+    let fresh = retro.is_empty();
     if fresh {
         commands.entity(cam).remove::<(Smaa, DepthOfField, Vignette)>();
+        if low.0 {
+            commands.entity(cam).remove::<Bloom>();
+        }
     }
     // Neues Bild, wenn sich Zeitalter, Fenstergröße oder Skalierung geändert hat
     if view.as_ref().is_none_or(|v| v.4 != *era || v.2 != size || (v.3 - scale).abs() > 1e-4) {
         let image = images.add(retro_image(size, *era));
-        let params = Vec4::new(size.x as f32, size.y as f32, 0.0, era.shader_mode());
+        let params = Vec4::new(size.x as f32, size.y as f32, 0.0, mode);
         let mat = match view.as_ref() {
             Some((_, m, ..)) => {
                 if let Some(mut m2) = mats.get_mut(m) {
