@@ -748,8 +748,15 @@ pub fn build_wall(team: Team, meshes: &mut Assets<Mesh>) -> StructMeshes {
         // Wasserablauf unten
         g.cuboid(Vec3::new(0.5, 0.12, side * 0.45), Vec3::new(0.18, 0.1, 0.04), Quat::IDENTITY, p.steel_dark);
     }
+    // Runde Pfeiler an beiden Enden: Stöße und Ecken schließen weich, auch wenn zwei Linien
+    // schräg aufeinandertreffen. Die beiden Enden sind leicht verschieden groß, damit sich die
+    // Pfeiler zweier Nachbarstücke an derselben Stelle nicht flimmernd überdecken.
+    for (x, r, h) in [(half - 0.03, 0.52, 1.92), (-(half - 0.03), 0.5, 1.88)] {
+        g.frustum(Vec3::new(x, h * 0.5, 0.0), r, r * 0.78, h, Vec3::Y, 14, concrete);
+        g.frustum(Vec3::new(x, h + 0.07, 0.0), r * 0.82, r * 0.62, 0.14, Vec3::Y, 14, concrete_dark);
+    }
     // kleine Positionsleuchte auf der Kappe
-    glow.cuboid(Vec3::new(-0.7, 1.97, 0.0), Vec3::new(0.08, 0.03, 0.08), Quat::IDENTITY, Vec3::ONE);
+    glow.cuboid(Vec3::new(-0.55, 1.97, 0.0), Vec3::new(0.08, 0.03, 0.08), Quat::IDENTITY, Vec3::ONE);
     g.weather(p.dust, 0.9, 0.5);
     StructMeshes {
         body: meshes.add(g.build().expect("Mauer")),

@@ -109,6 +109,7 @@ fn main() {
             (
                 (
                     input::camera_control,
+                    construction::building_actions,
                     construction::placement_input,
                     input::mouse_commands,
                     input::toggle_click_mode,

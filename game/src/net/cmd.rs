@@ -22,6 +22,10 @@ pub enum Cmd {
     Place { kind: BuildingKind, pos: Vec3, rot: Option<Quat> },
     /// Aufgeben (Duell)
     Surrender,
+    /// Eigenes Gebäude abreißen (halbe Kosten zurück)
+    Demolish { building: NetId },
+    /// Eigenes Gebäude an eine neue Stelle versetzen (baut sich dort neu auf)
+    Relocate { building: NetId, pos: Vec3, rot: Option<Quat> },
 }
 
 /// Befehle, die die eigene Eingabe seit dem letzten Tick erzeugt hat
@@ -85,6 +89,17 @@ impl Writer {
             self.u32(i.0);
         }
     }
+    fn rot(&mut self, rot: Option<Quat>) {
+        match rot {
+            Some(q) => {
+                self.u8(1);
+                for v in q.to_array() {
+                    self.f32(v);
+                }
+            }
+            None => self.u8(0),
+        }
+    }
     pub fn cmd(&mut self, c: &Cmd) {
         match c {
             Cmd::Move { units, target, line, kind, queue } => {
@@ -138,17 +153,19 @@ impl Writer {
                 self.u8(8);
                 self.u8(kind.idx() as u8);
                 self.vec3(*pos);
-                match rot {
-                    Some(q) => {
-                        self.u8(1);
-                        for v in q.to_array() {
-                            self.f32(v);
-                        }
-                    }
-                    None => self.u8(0),
-                }
+                self.rot(*rot);
             }
             Cmd::Surrender => self.u8(9),
+            Cmd::Demolish { building } => {
+                self.u8(10);
+                self.u32(building.0);
+            }
+            Cmd::Relocate { building, pos, rot } => {
+                self.u8(11);
+                self.u32(building.0);
+                self.vec3(*pos);
+                self.rot(*rot);
+            }
         }
     }
 }
@@ -185,6 +202,12 @@ impl<'a> Reader<'a> {
     }
     fn vec3(&mut self) -> Option<Vec3> {
         Some(Vec3::new(self.f32()?, self.f32()?, self.f32()?))
+    }
+    fn rot(&mut self) -> Option<Option<Quat>> {
+        Some(match self.u8()? {
+            1 => Some(Quat::from_array([self.f32()?, self.f32()?, self.f32()?, self.f32()?])),
+            _ => None,
+        })
     }
     fn ids(&mut self) -> Option<Vec<NetId>> {
         let n = self.u32()? as usize;
@@ -224,13 +247,11 @@ impl<'a> Reader<'a> {
             8 => {
                 let kind = *BUILDING_KINDS.get(self.u8()? as usize)?;
                 let pos = self.vec3()?;
-                let rot = match self.u8()? {
-                    1 => Some(Quat::from_array([self.f32()?, self.f32()?, self.f32()?, self.f32()?])),
-                    _ => None,
-                };
-                Cmd::Place { kind, pos, rot }
+                Cmd::Place { kind, pos, rot: self.rot()? }
             }
             9 => Cmd::Surrender,
+            10 => Cmd::Demolish { building: NetId(self.u32()?) },
+            11 => Cmd::Relocate { building: NetId(self.u32()?), pos: self.vec3()?, rot: self.rot()? },
             _ => return None,
         })
     }
@@ -265,6 +286,11 @@ fn on_map(p: Vec3) -> Option<Vec3> {
     p.is_finite().then(|| Vec3::new(p.x.clamp(-MAP_HALF, MAP_HALF), p.y.clamp(-50.0, 50.0), p.z.clamp(-MAP_HALF, MAP_HALF)))
 }
 
+/// Drehung nur als gültige, normierte Quaternion
+fn clean_rot(rot: Option<Quat>) -> Option<Quat> {
+    rot.filter(|q| q.is_finite() && q.length_squared() > 1e-6).map(|q| q.normalize())
+}
+
 pub fn apply_cmds(
     mut commands: Commands,
     mut cmds: ResMut<TickCmds>,
@@ -277,6 +303,7 @@ pub fn apply_cmds(
     mut builds: MessageWriter<crate::units::BuildRequest>,
     mut places: MessageWriter<crate::construction::PlaceRequest>,
     mut outcome: ResMut<Outcome>,
+    mut rebuilds: MessageWriter<crate::construction::RebuildRequest>,
 ) {
     if cmds.0.is_empty() {
         return;
@@ -348,8 +375,7 @@ pub fn apply_cmds(
                 builds.write(crate::units::BuildRequest { team, kind });
             }
             Cmd::Place { kind, pos, rot } => {
-                // Drehung nur als gültige, normierte Quaternion
-                let rot = rot.filter(|q| q.is_finite() && q.length_squared() > 1e-6).map(|q| q.normalize());
+                let rot = clean_rot(rot);
                 if pos.is_finite() && pos.x.abs() <= MAP_HALF && pos.z.abs() <= MAP_HALF {
                     places.write(crate::construction::PlaceRequest { team, kind, pos, rot });
                 }
@@ -357,6 +383,17 @@ pub fn apply_cmds(
             Cmd::Surrender => {
                 if *outcome == Outcome::Running {
                     *outcome = if team == PLAYER { Outcome::Lost } else { Outcome::Won };
+                }
+            }
+            // Ob das Gebäude dem Team gehört, prüft der Bau (construction::rebuild)
+            Cmd::Demolish { building } => {
+                if let Some(&e) = map.get(&building) {
+                    rebuilds.write(crate::construction::RebuildRequest { team, building: e, to: None });
+                }
+            }
+            Cmd::Relocate { building, pos, rot } => {
+                if let (Some(&e), true) = (map.get(&building), pos.is_finite() && pos.x.abs() <= MAP_HALF && pos.z.abs() <= MAP_HALF) {
+                    rebuilds.write(crate::construction::RebuildRequest { team, building: e, to: Some((pos, clean_rot(rot))) });
                 }
             }
         }
@@ -389,6 +426,9 @@ mod tests {
             Cmd::Produce { kind: UnitKind::Panzer },
             Cmd::Place { kind: BuildingKind::Tor, pos: Vec3::new(-3.0, 0.0, 4.0), rot: Some(Quat::from_rotation_y(0.7)) },
             Cmd::Place { kind: BuildingKind::Raketenturm, pos: Vec3::new(10.0, 0.0, 4.0), rot: None },
+            Cmd::Demolish { building: NetId(42) },
+            Cmd::Relocate { building: NetId(7), pos: Vec3::new(-1.5, 0.25, 9.0), rot: None },
+            Cmd::Relocate { building: NetId(8), pos: Vec3::ONE, rot: Some(Quat::from_rotation_y(-1.2)) },
             Cmd::Surrender,
         ];
         let bytes = encode(&cmds);

@@ -391,3 +391,91 @@ fn ticks_outside_the_window_are_refused() {
     w.u32(1);
     assert_eq!(a.receive(ENEMY, &w.0), Event::Bad);
 }
+
+/// Ein fertiges Gebäude direkt in die Partie setzen und seine NetId holen
+fn build_here(app: &mut App, team: Team, kind: BuildingKind, pos: Vec3) -> (Entity, NetId) {
+    let e = app.world_mut().resource_scope(|world, kit: Mut<ModelKit>| {
+        let mut queue = bevy::ecs::world::CommandQueue::default();
+        let mut c = Commands::new(&mut queue, world);
+        let e = crate::construction::spawn_finished_structure(&mut c, &kit, team, kind, pos, None);
+        queue.apply(world);
+        e
+    });
+    run(app, vec![]);
+    let id = *app.world().get::<NetId>(e).expect("NetId");
+    (e, id)
+}
+
+fn run(app: &mut App, cmds: Vec<(Team, Cmd)>) {
+    app.world_mut().resource_mut::<TickCmds>().0 = cmds;
+    sim::run_tick(app.world_mut());
+}
+
+fn structures_of(app: &mut App, kind: BuildingKind) -> Vec<(Vec3, Team, Option<f32>)> {
+    let mut q = app.world_mut().query::<(&Transform, &Team, &Structure, Option<&crate::components::Construction>)>();
+    q.iter(app.world()).filter(|r| r.2 .0 == kind).map(|r| (r.0.translation, *r.1, r.3.map(|c| c.progress))).collect()
+}
+
+/// Abriss: nur eigene Gebäude, halbe Kosten zurück, doppelte Befehle erstatten nicht doppelt,
+/// das Hauptquartier lässt sich nicht abreißen
+#[test]
+fn demolish_refunds_half_once() {
+    let mut app = duel_app();
+    let pos = PLAYER_HQ_POS + Vec3::new(12.0, 0.0, -2.0);
+    let (_, tower) = build_here(&mut app, PLAYER, BuildingKind::Geschuetzturm, pos);
+    let before = app.world().resource::<Stock>().0;
+    // der Gegner darf fremde Gebäude nicht abreißen
+    run(&mut app, vec![(ENEMY, Cmd::Demolish { building: tower })]);
+    assert_eq!(structures_of(&mut app, BuildingKind::Geschuetzturm).len(), 1);
+    run(&mut app, vec![(PLAYER, Cmd::Demolish { building: tower }), (PLAYER, Cmd::Demolish { building: tower })]);
+    assert!(structures_of(&mut app, BuildingKind::Geschuetzturm).is_empty());
+    let after = app.world().resource::<Stock>().0;
+    let back = crate::construction::refund(BuildingKind::Geschuetzturm);
+    assert_eq!(back, [60, 20]);
+    assert_eq!(after[0][0], before[0][0] + back[0]);
+    assert_eq!(after[0][1], before[0][1] + back[1]);
+    assert_eq!(after[1], before[1]);
+    // Hauptquartier bleibt stehen
+    let mut q = app.world_mut().query_filtered::<(&NetId, &Team), With<Hq>>();
+    let hq = *q.iter(app.world()).find(|r| *r.1 == PLAYER).expect("HQ").0;
+    run(&mut app, vec![(PLAYER, Cmd::Demolish { building: hq })]);
+    let mut q = app.world_mut().query_filtered::<&Team, With<Hq>>();
+    assert!(q.iter(app.world()).any(|t| *t == PLAYER));
+}
+
+/// Versetzen: kostenlos, das Gebäude baut sich am neuen Platz ab halber Bauzeit auf;
+/// auf einen belegten Platz oder von fremder Hand geht es nicht
+#[test]
+fn relocate_moves_and_rebuilds() {
+    let mut app = duel_app();
+    let pos = PLAYER_HQ_POS + Vec3::new(12.0, 0.0, -2.0);
+    let (_, tower) = build_here(&mut app, PLAYER, BuildingKind::Geschuetzturm, pos);
+    let before = app.world().resource::<Stock>().0;
+    // auf das Hauptquartier: verweigert
+    run(&mut app, vec![(PLAYER, Cmd::Relocate { building: tower, pos: PLAYER_HQ_POS, rot: None })]);
+    // vom Gegner: verweigert
+    let to = PLAYER_HQ_POS + Vec3::new(2.0, 0.0, -13.0);
+    run(&mut app, vec![(ENEMY, Cmd::Relocate { building: tower, pos: to, rot: None })]);
+    let towers = structures_of(&mut app, BuildingKind::Geschuetzturm);
+    assert_eq!(towers.len(), 1);
+    assert!(flat(towers[0].0).distance(flat(pos)) < 0.01);
+    run(&mut app, vec![(PLAYER, Cmd::Relocate { building: tower, pos: to, rot: None })]);
+    let towers = structures_of(&mut app, BuildingKind::Geschuetzturm);
+    assert_eq!(towers.len(), 1, "{towers:?}");
+    assert!(flat(towers[0].0).distance(flat(to)) < 0.01);
+    assert!(towers[0].2.is_some_and(|p| (0.5..0.6).contains(&p)), "Baufortschritt {:?}", towers[0].2);
+    assert_eq!(app.world().resource::<Stock>().0, before);
+}
+
+/// Neue Mauerlinien rasten an Mauerenden ein: Ende eines Stücks liegt 1 m von der Mitte entlang der Linie
+#[test]
+fn wall_ends_lie_on_the_line() {
+    let a = Vec3::new(0.0, 0.0, 0.0);
+    let b = Vec3::new(0.0, 0.0, 6.0);
+    let (segs, end) = crate::construction::wall_segments(a, b);
+    let rot = crate::construction::along(b - a);
+    let last = crate::construction::wall_ends(*segs.last().expect("Stück"), rot);
+    assert!(last.iter().any(|p| p.distance(end) < 1e-4), "{last:?} vs {end}");
+    let first = crate::construction::wall_ends(segs[0], rot);
+    assert!(first.iter().any(|p| p.distance(a) < 1e-4));
+}

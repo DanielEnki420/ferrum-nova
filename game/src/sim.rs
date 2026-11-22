@@ -77,7 +77,8 @@ pub fn add_sim(app: &mut App) {
         .init_resource::<SimSight>()
         .init_resource::<SimHash>()
         .init_resource::<net::cmd::Outbox>()
-        .init_resource::<net::cmd::TickCmds>();
+        .init_resource::<net::cmd::TickCmds>()
+        .add_message::<construction::RebuildRequest>();
     if !app.world().contains_resource::<SimRules>() {
         app.init_resource::<SimRules>();
     }
@@ -93,6 +94,7 @@ pub fn add_sim(app: &mut App) {
                 (ai::enemy_ai, ai::ai_tactics).chain().run_if(solo),
                 units::enqueue_builds,
                 construction::place_buildings,
+                construction::rebuild,
                 construction::construct,
                 units::snapshot,
                 nav::update_grid,

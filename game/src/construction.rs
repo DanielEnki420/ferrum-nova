@@ -30,10 +30,30 @@ pub struct PlaceRequest {
     pub rot: Option<Quat>,
 }
 
+/// Eigenes Gebäude abreißen (`to: None`) oder an eine neue Stelle versetzen
+#[derive(Message)]
+pub struct RebuildRequest {
+    pub team: Team,
+    pub building: Entity,
+    pub to: Option<(Vec3, Option<Quat>)>,
+}
+
+/// Anteil der Baukosten, den ein Abriss zurückgibt
+pub const REFUND: f32 = 0.5;
+/// Versetzte Gebäude bauen sich ab dieser Fortschrittsmarke neu auf (halbe Bauzeit)
+pub const RELOCATE_PROGRESS: f32 = 0.5;
+
+/// Erstattung beim Abriss
+pub fn refund(kind: BuildingKind) -> [u32; 2] {
+    kind.cost().map(|c| (c as f32 * REFUND) as u32)
+}
+
 /// Baumodus des Spielers
 #[derive(Resource, Default)]
 pub struct Placing {
     pub kind: Option<BuildingKind>,
+    /// Versetzen statt neu bauen: dieses eigene Gebäude
+    pub moving: Option<(Entity, NetId)>,
     ghost: Option<(Entity, BuildingKind, bool)>,
     /// Dieser Mausklick gehörte dem Baumodus (nicht als Auswahl werten)
     pub block_click: bool,
@@ -190,10 +210,56 @@ pub fn wall_segments(a: Vec3, b: Vec3) -> (Vec<Vec3>, Vec3) {
     (centers, a + dir * (2.0 * n as f32))
 }
 
+/// So nah muss der Mauszeiger an einem Mauerende sein, damit eine neue Linie dort ansetzt
+const SNAP: f32 = 2.5;
+
+/// Nächstes Ende eines eigenen Mauerstücks in Reichweite, sonst der Punkt selbst
+fn snap_to_wall_end(p: Vec3, me: Team, walls: &Query<(&Transform, &Team, &Structure), With<Building>>) -> Vec3 {
+    let ends = walls
+        .iter()
+        .filter(|(_, team, s)| **team == me && s.0 == BuildingKind::Mauer)
+        .flat_map(|(t, _, _)| wall_ends(t.translation, t.rotation));
+    nearest_within(p, ends, SNAP).unwrap_or(p)
+}
+
+/// Die beiden Enden eines Mauerstücks (Mitte ± 1 m entlang der lokalen X-Achse)
+pub fn wall_ends(center: Vec3, rot: Quat) -> [Vec3; 2] {
+    let d = flat(rot * Vec3::X).normalize_or(Vec3::X);
+    [center + d, center - d]
+}
+
+fn nearest_within(p: Vec3, pts: impl Iterator<Item = Vec3>, max: f32) -> Option<Vec3> {
+    pts.map(|q| (flat(q).distance(flat(p)), q))
+        .filter(|(d, _)| *d < max)
+        .min_by(|a, b| a.0.total_cmp(&b.0))
+        .map(|(_, q)| Vec3::new(q.x, p.y, q.z))
+}
+
 /// Ausrichtung eines Mauerstücks entlang `dir` (lokale X-Achse)
 pub fn along(dir: Vec3) -> Quat {
     let d = flat(dir).normalize_or(Vec3::X);
     Quat::from_rotation_y((-d.z).atan2(d.x))
+}
+
+/// Ausgewähltes eigenes Gebäude: Entf/Rücktaste reißt es ab, O versetzt es
+pub fn building_actions(
+    keys: Res<ButtonInput<KeyCode>>,
+    mut placing: ResMut<Placing>,
+    mut outbox: ResMut<crate::net::cmd::Outbox>,
+    selected: Query<(Entity, &NetId, &Team, &Structure), (With<Selected>, Without<Hq>, Without<Unit>)>,
+) {
+    if placing.kind.is_some() || crate::input::modifiers(&keys).1 {
+        return;
+    }
+    let me = crate::net::me();
+    let Some((e, id, _, s)) = selected.iter().find(|r| *r.2 == me) else { return };
+    if keys.any_just_pressed([KeyCode::Delete, KeyCode::Backspace]) {
+        outbox.push(crate::net::cmd::Cmd::Demolish { building: *id });
+    } else if keys.just_pressed(KeyCode::KeyO) {
+        placing.kind = Some(s.0);
+        placing.moving = Some((e, *id));
+        placing.line_start = None;
+    }
 }
 
 /// Baumodus des Spielers: Tasten, Vorschau, Klick
@@ -225,8 +291,9 @@ pub fn placement_input(
         (KeyCode::KeyU, BuildingKind::Raketenturm),
     ] {
         if keys.just_pressed(key) {
-            placing.kind = if placing.kind == Some(kind) { None } else { Some(kind) };
+            placing.kind = if placing.kind == Some(kind) && placing.moving.is_none() { None } else { Some(kind) };
             placing.line_start = None;
+            placing.moving = None;
         }
     }
     if placing.kind.is_some() && (keys.just_pressed(KeyCode::Escape) || mouse.just_pressed(MouseButton::Right)) {
@@ -240,8 +307,15 @@ pub fn placement_input(
     }
     placing.line_info = None;
 
+    // Versetzen: das Gebäude muss noch stehen
+    let moving = placing.moving.and_then(|(e, id)| walls.get(e).ok().map(|(t, _, _)| (id, t.translation, t.rotation)));
+    if placing.moving.is_some() && moving.is_none() {
+        placing.moving = None;
+        placing.kind = None;
+    }
     let Some(kind) = placing.kind else {
         placing.line_start = None;
+        placing.moving = None;
         if let Some((g, _, _)) = placing.ghost.take() {
             commands.entity(g).try_despawn();
         }
@@ -254,7 +328,11 @@ pub fn placement_input(
         .filter(|c| !over_ui(win, *c, ui_scale.0))
         .and_then(|c| ground_point(camera, cam_t, c));
 
-    let site_list = collect_sites(&sites);
+    let mut site_list = collect_sites(&sites);
+    // beim Versetzen zählt die alte Stelle nicht als belegt
+    if let Some((_, old, _)) = moving {
+        site_list.retain(|s| flat(s.pos).distance(flat(old)) > 0.01);
+    }
     let node_list: Vec<Vec3> = nodes.iter().map(|t| t.translation).collect();
     let shift = keys.any_pressed([KeyCode::ShiftLeft, KeyCode::ShiftRight]);
 
@@ -265,11 +343,18 @@ pub fn placement_input(
     }
 
     // --- Mauer: Linie von Klick zu Klick, Vorschau als Umrisse
-    if kind == BuildingKind::Mauer {
+    if kind == BuildingKind::Mauer && moving.is_none() {
         if let Some((g, _, _)) = placing.ghost.take() {
             commands.entity(g).try_despawn();
         }
         let Some(p) = point else { return };
+        // an Enden eigener Mauern einrasten, damit Linien und Ecken geschlossen anschließen
+        let raw = p;
+        let p = snap_to_wall_end(p, me, &walls);
+        if flat(p).distance(flat(raw)) > 1e-3 {
+            // eingerastet: Ring am Mauerende
+            gizmos.circle(Isometry3d::new(terrain::on_ground(p) + Vec3::Y * 0.3, Quat::from_rotation_x(PI / 2.0)), 0.7, Color::srgb(0.4, 1.0, 0.5));
+        }
         let start = placing.line_start;
         let (segs, end) = match start {
             Some(a) => wall_segments(a, p),
@@ -335,8 +420,10 @@ pub fn placement_input(
         }
         _ => (point, None),
     };
+    // versetzte Gebäude behalten ihre Ausrichtung (ein Tor nimmt die der Mauer)
+    let rot = rot.or(moving.map(|(_, _, r)| r));
 
-    let valid = point.is_some_and(|p| can_place(kind, p, me, &site_list, &node_list) && stock.can_afford(me, kind.cost()));
+    let valid = point.is_some_and(|p| can_place(kind, p, me, &site_list, &node_list) && (moving.is_some() || stock.can_afford(me, kind.cost())));
 
     // Vorschau neu aufbauen, wenn sich Typ oder Gültigkeit ändert
     let default_rot = Transform::default().looking_to(-facing(me), Vec3::Y).rotation;
@@ -374,9 +461,15 @@ pub fn placement_input(
     if mouse.just_pressed(MouseButton::Left) {
         placing.block_click = true;
         if valid {
-            outbox.push(crate::net::cmd::Cmd::Place { kind, pos: p, rot });
-            if !shift {
+            if let Some((id, _, _)) = moving {
+                outbox.push(crate::net::cmd::Cmd::Relocate { building: id, pos: p, rot });
                 placing.kind = None;
+                placing.moving = None;
+            } else {
+                outbox.push(crate::net::cmd::Cmd::Place { kind, pos: p, rot });
+                if !shift {
+                    placing.kind = None;
+                }
             }
         }
     }
@@ -416,6 +509,71 @@ pub fn place_buildings(
         spawn_structure(&mut commands, &kit, r.team, r.kind, r.pos, r.rot);
         site_list.push(Site { pos: r.pos, radius: r.kind.radius(), team: r.team, wall: r.kind.is_wall(), gate: r.kind == BuildingKind::Tor });
         fx.write(FxEvent::BuildDust { pos: terrain::on_ground(r.pos), radius: r.kind.radius() });
+    }
+}
+
+/// Abriss und Versetzen eigener Gebäude (nicht das Hauptquartier)
+#[allow(clippy::too_many_arguments)]
+pub fn rebuild(
+    mut commands: Commands,
+    mut reqs: MessageReader<RebuildRequest>,
+    mut stock: ResMut<Stock>,
+    kit: Res<ModelKit>,
+    sites: SiteQuery,
+    buildings: Query<(&Transform, &Team, &Structure, &Health), Without<Hq>>,
+    walls: Query<(Entity, &Transform, &Team, &Structure)>,
+    nodes: Query<&Transform, With<ResourceNode>>,
+    mut fx: MessageWriter<FxEvent>,
+) {
+    let mut site_list: Option<Vec<Site>> = None;
+    let node_list: Vec<Vec3> = nodes.iter().map(|t| t.translation).collect();
+    // jedes Gebäude höchstens einmal je Tick (doppelte Befehle dürfen nicht doppelt erstatten)
+    let mut done: Vec<Entity> = Vec::new();
+    for r in reqs.read() {
+        if done.contains(&r.building) {
+            continue;
+        }
+        let Ok((t, team, s, hp)) = buildings.get(r.building) else { continue };
+        if *team != r.team {
+            continue;
+        }
+        let kind = s.0;
+        let old = t.translation;
+        let list = site_list.get_or_insert_with(|| collect_sites(&sites));
+        match r.to {
+            None => {
+                let back = refund(kind);
+                for (i, v) in back.iter().enumerate() {
+                    stock.0[team.0 as usize][i] += v;
+                }
+            }
+            Some((to, rot)) => {
+                // Platz prüfen, als stünde das Gebäude nicht mehr an der alten Stelle
+                let without: Vec<Site> = list.iter().copied().filter(|x| flat(x.pos).distance(flat(old)) > 0.01).collect();
+                if !can_place(kind, to, r.team, &without, &node_list) {
+                    continue;
+                }
+                *list = without;
+                // Ein Tor ersetzt die eigenen Mauerstücke an seiner neuen Stelle
+                if kind == BuildingKind::Tor {
+                    for (e, wt, wteam, ws) in &walls {
+                        if *wteam == r.team && ws.0 == BuildingKind::Mauer && flat(wt.translation).distance(flat(to)) < 3.6 {
+                            commands.entity(e).try_despawn();
+                            done.push(e);
+                            list.retain(|site| flat(site.pos).distance(flat(wt.translation)) > 0.01);
+                        }
+                    }
+                }
+                let e = spawn_structure(&mut commands, &kit, r.team, kind, to, Some(rot.unwrap_or(t.rotation)));
+                commands.entity(e).insert((Construction { progress: RELOCATE_PROGRESS, dust: 0.0 }, Health { hp: hp.hp.min(hp.max), max: hp.max }));
+                list.push(Site { pos: to, radius: kind.radius(), team: r.team, wall: kind.is_wall(), gate: kind == BuildingKind::Tor });
+                fx.write(FxEvent::BuildDust { pos: terrain::on_ground(to), radius: kind.radius() });
+            }
+        }
+        list.retain(|site| flat(site.pos).distance(flat(old)) > 0.01);
+        commands.entity(r.building).try_despawn();
+        done.push(r.building);
+        fx.write(FxEvent::BuildDust { pos: old, radius: kind.radius() });
     }
 }
 

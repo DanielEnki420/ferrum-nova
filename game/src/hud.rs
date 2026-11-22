@@ -272,6 +272,7 @@ pub fn update_hud(
     units: Query<(&Team, &Unit, Has<Selected>)>,
     structures: Query<(&Team, &Structure), Without<Construction>>,
     selected_hq: Query<&Team, (With<Hq>, With<Selected>)>,
+    selected_building: Query<(&Team, &Structure), (With<Selected>, Without<Hq>, Without<Unit>)>,
     placing: Res<Placing>,
     alerts: Res<crate::orders::Alerts>,
     mode: Res<crate::input::ClickMode>,
@@ -316,7 +317,10 @@ pub fn update_hud(
             counts[u.kind.idx()] += 1;
         }
     }
-    let sel_text = if placing.kind == Some(BuildingKind::Mauer) {
+    let own_building = selected_building.iter().find(|(t, _)| **t == crate::net::me()).map(|(_, s)| s.0);
+    let sel_text = if let (Some(k), Some(_)) = (placing.kind, placing.moving) {
+        format!("{} versetzen: Linksklick an der neuen Stelle (baut sich in halber Zeit neu auf) | Rechtsklick/Esc: abbrechen", k.name())
+    } else if placing.kind == Some(BuildingKind::Mauer) {
         match placing.line_info {
             Some((n, c)) if n > 1 || c[0] > 0 => format!("Mauer: {n} Stuecke, {} F | Klick: bauen | Shift+Klick: weiterziehen | Rechtsklick/Esc: Linie verwerfen", c[0]),
             _ => "Mauer: Startpunkt klicken, dann Endpunkt | Rechtsklick/Esc: abbrechen".to_string(),
@@ -329,6 +333,9 @@ pub fn update_hud(
         "Hauptquartier: Klick ins Gelaende setzt den Sammelpunkt | Rechtsklick: Auswahl aufheben".to_string()
     } else if counts.iter().sum::<i32>() == 0 && selected_hq.iter().any(|t| *t == crate::net::me()) {
         "Hauptquartier: Rechtsklick setzt den Sammelpunkt (auf einem Feld: Sammler bauen dort ab)".to_string()
+    } else if let (Some(k), 0) = (own_building, counts.iter().sum::<i32>()) {
+        let back = crate::construction::refund(k);
+        format!("{}: Entf abreissen (+{} F / {} P zurueck) | O versetzen", k.name(), back[0], back[1])
     } else if counts.iter().sum::<i32>() == 0 {
         let mode_hint = if mode.left_commands { "L: Zweitasten-Steuerung" } else { "L: Einknopf-Steuerung" };
         format!("Links: auswaehlen | Doppelklick: gleicher Typ | F: alle Kampfeinheiten | 1-9: Gruppe abrufen | {mode_hint}")
