@@ -8,3 +8,9 @@ compatibility_date = "2025-09-01"
 name = "DUELL"
 class_name = "DuellRaum"
 script_name = "ferrum-nova-duell"
+
+# Sperre nach 3 falschen Passwörtern (Durable Object im selben Worker)
+[[durable_objects.bindings]]
+name = "SPERRE"
+class_name = "Fehlversuche"
+script_name = "ferrum-nova-duell"

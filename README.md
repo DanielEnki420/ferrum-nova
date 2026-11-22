@@ -157,7 +157,7 @@ Unter `localhost:8080` verbindet sich das Spiel direkt mit dem Relay auf Port 87
 cd web/worker-duell && npx wrangler deploy
 ```
 
-Danach kennt das Pages-Projekt die Klasse über die Bindung in `web/wrangler.toml` (`script_name = "ferrum-nova-duell"`). Läuft der Passwortschutz über `functions/_middleware.js`, gilt er auch für `/ws/`. Ob Browser die Basic-Auth-Daten beim WebSocket-Upgrade mitschicken, ist nicht für jeden Browser sicher. Falls die Verbindung mit 401 scheitert, kann die Middleware `/ws/` ausnehmen. Dort schützt dann der Raumschlüssel im Link.
+Danach kennt das Pages-Projekt die Klasse über die Bindung in `web/wrangler.toml` (`script_name = "ferrum-nova-duell"`). Der Passwortschutz (`web/functions/_middleware.js`, Passwort im Secret `SPIEL_PASSWORT`) gilt auch für `/ws/`. Nach der Anmeldung setzt er ein signiertes Zugangs-Cookie (30 Tage). Das schickt jeder Browser auch beim WebSocket-Upgrade mit, Basic-Auth-Daten dagegen nicht zuverlässig. Drei verschiedene falsche Passwörter in 15 Minuten sperren die IP-Adresse (bei IPv6 das /64-Netz) für 15 Minuten. Der Zähler ist das Durable Object `Fehlversuche` im selben Worker (Bindung `SPERRE`). Wer schon ein gültiges Cookie hat, ist von einer Sperre nicht betroffen.
 
 **Einschränkungen (v1):** Kein Wiederverbinden nach einem Abbruch. Ein Hintergrund-Tab hält die eigene Simulation an, dann wartet auch der Mitspieler. Duelle gibt es nur im Browser, nicht in der Desktop-Version.
 

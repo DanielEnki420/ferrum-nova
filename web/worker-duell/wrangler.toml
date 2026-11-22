@@ -14,3 +14,12 @@ class_name = "DuellRaum"
 [[migrations]]
 tag = "v1"
 new_sqlite_classes = ["DuellRaum"]
+
+# Zähler für falsche Passwörter (Sperre nach 3 Fehlversuchen, siehe Fehlversuche in src/index.js)
+[[durable_objects.bindings]]
+name = "SPERRE"
+class_name = "Fehlversuche"
+
+[[migrations]]
+tag = "v2"
+new_sqlite_classes = ["Fehlversuche"]

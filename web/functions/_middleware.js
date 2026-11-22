@@ -3,6 +3,9 @@
 // geheime Variable SPIEL_PASSWORT im Pages-Projekt (wrangler pages secret put SPIEL_PASSWORT).
 // Ohne gesetztes Passwort bleibt die Seite gesperrt. Suchmaschinen sollen nichts aufnehmen.
 //
+// Drei verschiedene falsche Passwörter in 15 Minuten sperren die IP-Adresse für 15 Minuten
+// (Zähler: Durable Object Fehlversuche im Worker web/worker-duell, Bindung SPERRE).
+//
 // Nach der Anmeldung setzt die Seite ein Zugangs-Cookie (signiert mit dem Passwort, 30 Tage gültig).
 // Damit klappt auch die Duell-Verbindung (WebSocket), bei der nicht jeder Browser die
 // Basic-Auth-Daten mitschickt. Ein neues Passwort macht alle alten Cookies ungültig.
@@ -75,19 +78,66 @@ async function cookieValid(request, secret) {
   return same(sig, await signature(secret, exp));
 }
 
-function basicValid(request, secret) {
+// Passwort aus dem Basic-Auth-Kopf (null, wenn keiner da oder unlesbar)
+function basicPassword(request) {
   const header = request.headers.get('Authorization') || '';
   const [scheme, encoded] = header.split(' ');
   if (scheme !== 'Basic' || !encoded) {
-    return false;
+    return null;
   }
-  let decoded = '';
   try {
-    decoded = new TextDecoder().decode(Uint8Array.from(atob(encoded), (c) => c.charCodeAt(0)));
+    const decoded = new TextDecoder().decode(Uint8Array.from(atob(encoded), (c) => c.charCodeAt(0)));
+    return decoded.slice(decoded.indexOf(':') + 1);
   } catch {
+    return null;
+  }
+}
+
+async function sha256(text) {
+  const d = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text));
+  return [...new Uint8Array(d)].map((b) => b.toString(16).padStart(2, '0')).join('');
+}
+
+// Wer zählt als derselbe Absender: IPv4 die Adresse, IPv6 das /64-Netz
+function ipKey(ip) {
+  if (!ip.includes(':')) {
+    return ip;
+  }
+  const [h, t] = ip.split('::');
+  const head = h ? h.split(':') : [];
+  const tail = t ? t.split(':') : [];
+  const groups = [...head, ...Array(Math.max(0, 8 - head.length - tail.length)).fill('0'), ...tail];
+  return groups.slice(0, 4).map((g) => g.toLowerCase().replace(/^0+(?=.)/, '')).join(':') + '::/64';
+}
+
+// Anmeldeversuch beim Zähler melden; true = Adresse gesperrt. Ohne Zähler (oder bei einem
+// Fehler des Zählers) gibt es keine Sperre, damit niemand grundlos ausgesperrt wird.
+async function locked(context, ok, password) {
+  const sperre = context.env.SPERRE;
+  if (!sperre) {
     return false;
   }
-  return same(decoded.slice(decoded.indexOf(':') + 1), secret);
+  try {
+    const ip = context.request.headers.get('CF-Connecting-IP') || 'unbekannt';
+    const body = JSON.stringify({ ok, hash: ok ? undefined : await sha256(password) });
+    const res = await sperre.get(sperre.idFromName(ipKey(ip))).fetch('https://sperre/', { method: 'POST', body });
+    return (await res.json()).blocked === true;
+  } catch (e) {
+    console.error('Sperre nicht erreichbar', e);
+    return false;
+  }
+}
+
+function tooMany() {
+  return new Response('Zu viele falsche Passwörter. Bitte in 15 Minuten noch einmal versuchen.', {
+    status: 429,
+    headers: {
+      'Content-Type': 'text/plain; charset=utf-8',
+      'Retry-After': '900',
+      'Cache-Control': 'no-store',
+      'X-Robots-Tag': 'noindex, nofollow',
+    },
+  });
 }
 
 export async function onRequest(context) {
@@ -98,7 +148,17 @@ export async function onRequest(context) {
   const { request } = context;
   let fresh = false;
   if (!(await cookieValid(request, secret))) {
-    if (!basicValid(request, secret)) {
+    const password = basicPassword(request);
+    if (password === null) {
+      return denied();
+    }
+    // Jeder Versuch geht an den Zähler: nach 3 falschen Passwörtern ist die Adresse gesperrt,
+    // dann hilft auch das richtige nicht mehr (sonst ließe sich weiter raten)
+    const ok = same(password, secret);
+    if (await locked(context, ok, password)) {
+      return tooMany();
+    }
+    if (!ok) {
       return denied();
     }
     fresh = true;

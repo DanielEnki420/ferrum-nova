@@ -127,3 +127,57 @@ export default {
     return env.DUELL.get(id).fetch(request);
   },
 };
+
+// Fehlversuche beim Passwort, ein Objekt je IP-Adresse (IPv6: je /64-Netz). Die Middleware der
+// Website (web/functions/_middleware.js) meldet jeden Anmeldeversuch ohne gültiges Cookie:
+// { ok, hash } mit dem SHA-256 des falschen Passworts. Drei verschiedene falsche Passwörter in
+// 15 Minuten sperren die Adresse für 15 Minuten, auch für das richtige Passwort. Dasselbe falsche
+// Passwort zählt nur einmal (der Browser schickt gespeicherte Daten oft mehrfach).
+const MAX_FAILS = 3;
+const WINDOW_MS = 15 * 60 * 1000;
+const BLOCK_MS = 15 * 60 * 1000;
+
+export class Fehlversuche {
+  constructor(state) {
+    this.state = state;
+  }
+
+  async fetch(request) {
+    const { ok, hash } = await request.json().catch(() => ({}));
+    const now = Date.now();
+    const s = this.state.storage;
+    let rec = (await s.get('rec')) || { fails: [], first: now, until: 0 };
+    if (rec.until > now) {
+      return Response.json({ blocked: true, until: rec.until });
+    }
+    // Sperre vorbei oder Zeitfenster abgelaufen: neu zählen
+    if (rec.until || now - rec.first > WINDOW_MS) {
+      rec = { fails: [], first: now, until: 0 };
+    }
+    if (ok === true) {
+      await s.deleteAll();
+      return Response.json({ blocked: false });
+    }
+    if (typeof hash === 'string' && /^[0-9a-f]{64}$/.test(hash) && !rec.fails.includes(hash)) {
+      if (rec.fails.length === 0) rec.first = now;
+      rec.fails.push(hash);
+    }
+    if (rec.fails.length >= MAX_FAILS) {
+      rec.until = now + BLOCK_MS;
+    }
+    await s.put('rec', rec);
+    await s.setAlarm(Math.max(rec.until, rec.first + WINDOW_MS) + 1000);
+    return Response.json({ blocked: rec.until > now, until: rec.until });
+  }
+
+  // aufräumen, wenn Sperre und Zeitfenster vorbei sind
+  async alarm() {
+    const rec = await this.state.storage.get('rec');
+    const end = rec ? Math.max(rec.until, rec.first + WINDOW_MS) : 0;
+    if (Date.now() >= end) {
+      await this.state.storage.deleteAll();
+    } else {
+      await this.state.storage.setAlarm(end + 1000);
+    }
+  }
+}
