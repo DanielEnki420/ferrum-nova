@@ -2,16 +2,18 @@
 
 [![Ferrum Nova im Browser: eigene Basis mit HQ, Panzern und Sammler zwischen Ferrit-Kristallen und einer Plasma-Quelle](docs/screenshot.jpg)](https://danielenki420.github.io/ferrum-nova/)
 
-**[Jetzt im Browser spielen](https://danielenki420.github.io/ferrum-nova/)** · Version 0.1 · [MIT-Lizenz](LICENSE)
+**[Jetzt im Browser spielen](https://danielenki420.github.io/ferrum-nova/)** · Version 0.2 · [MIT-Lizenz](LICENSE)
 
 Ein eigenes Echtzeitstrategie-Spiel in **Rust + Bevy 0.20**. Es läuft als WebAssembly im Browser und ist in eine **Astro**-Website eingebettet. Aus demselben Code lässt sich auch eine Desktop-Version bauen.
 
 **Eine Hommage an Thandor.** Ferrum Nova ist eine Verbeugung vor *Thandor – Die Invasion*, dem Echtzeitstrategie-Spiel des Hannoveraner Studios Innonics aus dem Jahr 2000 (Vertrieb: JoWooD). Von dort stammt die Lust auf schwere Fahrzeuge, Basisbau und Gefechte auf einer fremden Welt. Ferrum Nova ist aber kein Nachbau: Welt, Geschichte, Einheiten, Grafik und Klänge sind eigenständig entstanden. Name und Inhalte von Thandor gehören ihren Rechteinhabern.
 
-## Jetzt spielen (Version 0.1)
+## Jetzt spielen (Version 0.2)
 
-- **Im Browser gegen VAAR:** https://danielenki420.github.io/ferrum-nova/. Läuft direkt, ohne Installation und Anmeldung. Am besten in einem aktuellen Chrome, Edge oder Firefox am Desktop.
+- **Im Browser gegen VAAR:** https://danielenki420.github.io/ferrum-nova/. Läuft direkt, ohne Installation und Anmeldung. Am besten in einem aktuellen Chrome, Edge oder Firefox am Desktop. In Safari schaltet sich ein Speichersparmodus ein (3D-Bild in einfacher Auflösung), weil Safari die Seite sonst bei großen Gefechten neu lädt.
 - **Duell 1 gegen 1:** Auf der Testversion bei Cloudflare mit Einladungslink. Sie ist passwortgeschützt, das Passwort gibt es auf Anfrage. „Duell erstellen“ auf GitHub Pages leitet dorthin weiter.
+
+Neu in 0.2: Gebäude abreißen (halbe Kosten zurück) und versetzen, ganze Mauerlinien auf einmal abreißen, rundere Mauern, die an vorhandene Enden einrasten, echte Umlaute, ein Hinweis bei Grafikverlust statt schwarzem Bild und ein Speichersparmodus für Safari. Der Absturz beim Bau großer Mauern ist behoben.
 
 Neu in 0.1: lernender Gegner VAAR, Halkyon-Finsternis, Zeitsprung 2026 / 2000 / 1996 (Taste Z), Kampagne und das Live-Duell über einen Einladungslink.
 
