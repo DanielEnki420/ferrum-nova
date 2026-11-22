@@ -6,6 +6,11 @@ export async function onRequest(context) {
   if (!/^[a-z0-9]{1,32}$/i.test(raum)) {
     return new Response('Unbekannter Raum', { status: 404 });
   }
+  // Nur Verbindungen von der eigenen Seite (Schutz gegen fremde Seiten, die das Cookie mitbenutzen)
+  const origin = context.request.headers.get('Origin');
+  if (origin && origin !== new URL(context.request.url).origin) {
+    return new Response('Fremde Herkunft', { status: 403 });
+  }
   if (!context.env.DUELL) {
     return new Response('Duell-Server nicht eingerichtet (Durable-Object-Bindung DUELL fehlt).', { status: 503 });
   }

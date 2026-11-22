@@ -258,6 +258,13 @@ pub fn decode(data: &[u8]) -> Option<Vec<Cmd>> {
 // ------------------------------------------------------------------ Anwenden
 
 /// Befehle des Ticks ausführen. Es zählen nur eigene Einheiten des jeweiligen Teams.
+/// Punkt aus einem Befehl: nur endliche Werte, auf die Karte begrenzt. Befehle kommen im Duell
+/// vom anderen Rechner; ungültige Zahlen (NaN, unendlich, weit draußen) dürfen das Spiel nicht
+/// stören. Beide Rechner wenden dieselbe Regel an, die Simulation bleibt gleich.
+fn on_map(p: Vec3) -> Option<Vec3> {
+    p.is_finite().then(|| Vec3::new(p.x.clamp(-MAP_HALF, MAP_HALF), p.y.clamp(-50.0, 50.0), p.z.clamp(-MAP_HALF, MAP_HALF)))
+}
+
 pub fn apply_cmds(
     mut commands: Commands,
     mut cmds: ResMut<TickCmds>,
@@ -287,6 +294,8 @@ pub fn apply_cmds(
         };
         match cmd {
             Cmd::Move { units: list, target, line, kind, queue } => {
+                let Some(target) = on_map(target) else { continue };
+                let line = line.and_then(|(a, b)| Some((on_map(a)?, on_map(b)?)));
                 let ms = members(&list);
                 issue_group_move(&mut commands, &ms, target, line, kind, queue);
                 // Sammler, die woanders hinfahren sollen, hören auf zu sammeln
@@ -330,6 +339,7 @@ pub fn apply_cmds(
                 }
             }
             Cmd::Rally { hq, pos, node } => {
+                let Some(pos) = on_map(pos) else { continue };
                 let Some(&e) = map.get(&hq).filter(|e| hqs.get(**e).is_ok_and(|t| *t == team)) else { continue };
                 let node = node.and_then(|n| map.get(&n).copied()).filter(|n| nodes.contains(*n));
                 commands.entity(e).insert(Rally { pos, node });
@@ -338,6 +348,8 @@ pub fn apply_cmds(
                 builds.write(crate::units::BuildRequest { team, kind });
             }
             Cmd::Place { kind, pos, rot } => {
+                // Drehung nur als gültige, normierte Quaternion
+                let rot = rot.filter(|q| q.is_finite() && q.length_squared() > 1e-6).map(|q| q.normalize());
                 if pos.is_finite() && pos.x.abs() <= MAP_HALF && pos.z.abs() <= MAP_HALF {
                     places.write(crate::construction::PlaceRequest { team, kind, pos, rot });
                 }
@@ -397,5 +409,13 @@ mod tests {
         for (i, k) in BUILDING_KINDS.iter().enumerate() {
             assert_eq!(k.idx(), i);
         }
+    }
+
+    #[test]
+    fn foreign_points_are_kept_on_the_map() {
+        assert_eq!(on_map(Vec3::new(1.0, 2.0, 3.0)), Some(Vec3::new(1.0, 2.0, 3.0)));
+        assert_eq!(on_map(Vec3::new(1e9, -1e9, -1e9)), Some(Vec3::new(MAP_HALF, -50.0, -MAP_HALF)));
+        assert_eq!(on_map(Vec3::new(f32::NAN, 0.0, 0.0)), None);
+        assert_eq!(on_map(Vec3::new(0.0, f32::INFINITY, 0.0)), None);
     }
 }

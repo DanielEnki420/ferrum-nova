@@ -18,8 +18,13 @@ use cmd::{Cmd, Outbox, Reader, TickCmds, Writer};
 use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicU8, Ordering};
 
-/// Eingabeverzögerung in Ticks (4 × 50 ms)
+/// Eingabeverzögerung zu Beginn in Ticks (4 × 50 ms). Danach passt sie sich der gemessenen
+/// Antwortzeit an (`MIN_DELAY` bis `MAX_DELAY`, siehe `Net::adapt_delay`).
 pub const DELAY: u32 = 4;
+pub const MIN_DELAY: u32 = 2;
+pub const MAX_DELAY: u32 = 8;
+/// So weit voraus darf der Mitspieler Befehle schicken (Ticks, 60 s)
+const TICK_WINDOW: u32 = 1200;
 
 /// Version der Spieldateien: beide müssen exakt dasselbe Spiel laufen lassen (build.rs)
 pub const BUILD_ID: u64 = {
@@ -56,6 +61,8 @@ pub fn them() -> Team {
 const MSG_HELLO: u8 = 1;
 const MSG_CMDS: u8 = 2;
 const MSG_HASH: u8 = 3;
+const MSG_PING: u8 = 4;
+const MSG_PONG: u8 = 5;
 
 /// Befehlsschlangen beider Seiten und die Prüfsummen, unabhängig vom Transport
 #[derive(Default, Debug)]
@@ -66,12 +73,22 @@ pub struct Lockstep {
     /// Höchster Tick, für den Befehle des Mitspielers da sind
     pub peer_tick: Option<u32>,
     pub desync: Option<u32>,
+    /// Nächster Tick, für den dieser Rechner seine Befehle festlegen muss
+    next_mine: u32,
+    /// Nächster Tick, der gerechnet wird (ältere sind erledigt)
+    next_take: u32,
+    /// Aktuelle eigene Eingabeverzögerung in Ticks
+    pub delay: u32,
 }
 
 /// Was aus einer Nachricht des Mitspielers folgt
 #[derive(Debug, PartialEq)]
 pub enum Event {
     Hello(u64),
+    /// Messung des Mitspielers (Zeitstempel zurückschicken)
+    Ping(f64),
+    /// Antwort auf die eigene Messung
+    Pong(f64),
     Nothing,
     Bad,
 }
@@ -83,7 +100,39 @@ impl Lockstep {
         for t in 0..DELAY {
             l.slots.insert(t, [Some(Vec::new()), Some(Vec::new())]);
         }
+        l.next_mine = DELAY;
+        l.delay = DELAY;
         l
+    }
+
+    /// Eigene Befehle lückenlos einplanen: alle Ticks bis `tick + delay`, die noch fehlen.
+    /// Die Befehle kommen in den ersten davon. Ist nichts einzuplanen (die Verzögerung ist
+    /// gerade gesunken), bleiben sie in `pending` für den nächsten Tick.
+    pub fn fill(&mut self, me: Team, tick: u32, pending: &mut Vec<Cmd>) -> Vec<Vec<u8>> {
+        let mut out = Vec::new();
+        while self.next_mine <= tick + self.delay {
+            let t = self.next_mine;
+            self.next_mine += 1;
+            if self.scheduled(me, t) {
+                continue;
+            }
+            out.extend(self.schedule(me, t, std::mem::take(pending)));
+        }
+        out
+    }
+
+    pub fn ping(at: f64) -> Vec<u8> {
+        let mut w = Writer::default();
+        w.u8(MSG_PING);
+        w.u64(at.to_bits());
+        w.0
+    }
+
+    pub fn pong(at: f64) -> Vec<u8> {
+        let mut w = Writer::default();
+        w.u8(MSG_PONG);
+        w.u64(at.to_bits());
+        w.0
     }
 
     pub fn hello() -> Vec<u8> {
@@ -122,6 +171,11 @@ impl Lockstep {
             Some(MSG_HELLO) => r.u64().map_or(Event::Bad, Event::Hello),
             Some(MSG_CMDS) => {
                 let Some(tick) = r.u32() else { return Event::Bad };
+                // Nur Ticks im erwartbaren Fenster: Erledigtes oder weit Zukünftiges würde
+                // sonst ewig im Speicher liegen (ein manipulierter Mitspieler könnte ihn füllen)
+                if tick < self.next_take || tick > self.next_take + TICK_WINDOW {
+                    return Event::Bad;
+                }
                 let mut cmds = Vec::new();
                 while !r.done() {
                     match r.cmd() {
@@ -133,6 +187,8 @@ impl Lockstep {
                 self.peer_tick = Some(self.peer_tick.map_or(tick, |p| p.max(tick)));
                 Event::Nothing
             }
+            Some(MSG_PING) => r.u64().map_or(Event::Bad, |b| Event::Ping(f64::from_bits(b))),
+            Some(MSG_PONG) => r.u64().map_or(Event::Bad, |b| Event::Pong(f64::from_bits(b))),
             Some(MSG_HASH) => {
                 let (Some(tick), Some(h)) = (r.u32(), r.u64()) else { return Event::Bad };
                 self.note_hash(peer, tick, h);
@@ -149,6 +205,7 @@ impl Lockstep {
             return None;
         }
         let [a, b] = self.slots.remove(&tick)?;
+        self.next_take = self.next_take.max(tick + 1);
         let mut out: Vec<(Team, Cmd)> = a.unwrap_or_default().into_iter().map(|c| (PLAYER, c)).collect();
         out.extend(b.unwrap_or_default().into_iter().map(|c| (ENEMY, c)));
         Some(out)
@@ -210,11 +267,31 @@ pub struct Net {
     hello_sent: bool,
     /// So lange wartet der laufende Tick schon (s)
     pub stalled_for: f32,
+    /// Echtzeit (s), für die Laufzeitmessung
+    pub now: f64,
+    last_ping: f64,
+    /// Geglättete Antwortzeit über das Relay und ihre Schwankung (s)
+    pub rtt: Option<f64>,
+    rtt_var: f64,
+    /// Seit wann die Verzögerung kleiner sein dürfte (s)
+    lower_since: Option<f64>,
 }
 
 impl Net {
     pub fn solo() -> Self {
-        Net { status: Status::Solo, lockstep: Lockstep::new(), room: None, peer_here: false, hello_sent: false, stalled_for: 0.0 }
+        Net {
+            status: Status::Solo,
+            lockstep: Lockstep::new(),
+            room: None,
+            peer_here: false,
+            hello_sent: false,
+            stalled_for: 0.0,
+            now: 0.0,
+            last_ping: f64::NEG_INFINITY,
+            rtt: None,
+            rtt_var: 0.0,
+            lower_since: None,
+        }
     }
     pub fn duel(room: String, key: String) -> Self {
         Net { status: Status::Connecting, room: Some((room, key)), ..Net::solo() }
@@ -245,6 +322,8 @@ impl Net {
                         self.status = Status::Running;
                     }
                 }
+                Event::Ping(at) => out.push(Lockstep::pong(at)),
+                Event::Pong(at) => self.note_rtt((self.now - at).max(0.0)),
                 Event::Nothing => {}
                 Event::Bad => warn!("Duell: unlesbare Nachricht ({} Bytes)", b.len()),
             },
@@ -253,6 +332,50 @@ impl Net {
                     self.status = Status::Failed("Verbindung zum Duell-Server verloren.");
                 }
             }
+        }
+    }
+
+    /// Neue Messung der Antwortzeit einrechnen (wie bei TCP: Mittel und Schwankung)
+    pub fn note_rtt(&mut self, sample: f64) {
+        match self.rtt {
+            None => {
+                self.rtt = Some(sample);
+                self.rtt_var = sample / 2.0;
+            }
+            Some(r) => {
+                self.rtt_var = 0.75 * self.rtt_var + 0.25 * (r - sample).abs();
+                self.rtt = Some(0.875 * r + 0.125 * sample);
+            }
+        }
+    }
+
+    /// Passende Verzögerung: Befehle müssen beim Mitspieler sein, bevor ihr Tick dran ist.
+    /// Einweg-Laufzeit plus Schwankung plus ein Bild und ein halber Tick Spielraum.
+    pub fn wanted_delay(&self) -> u32 {
+        let Some(rtt) = self.rtt else { return DELAY };
+        let need = rtt / 2.0 + 2.0 * self.rtt_var + 0.016 + 0.025;
+        ((need / crate::sim::DT as f64).ceil() as u32).clamp(MIN_DELAY, MAX_DELAY)
+    }
+
+    /// Verzögerung anpassen: sofort größer, kleiner erst nach 3 s ruhiger Leitung
+    /// und ohne Wartezeiten. Jede Seite wählt ihre eigene, `Lockstep::fill` hält sie lückenlos.
+    pub fn adapt_delay(&mut self) {
+        let want = self.wanted_delay();
+        let ls = &mut self.lockstep;
+        if self.status == Status::Stalled {
+            self.lower_since = None;
+        }
+        if want > ls.delay {
+            ls.delay = want;
+            self.lower_since = None;
+        } else if want < ls.delay {
+            let since = *self.lower_since.get_or_insert(self.now);
+            if self.now - since >= 3.0 {
+                ls.delay -= 1;
+                self.lower_since = None;
+            }
+        } else {
+            self.lower_since = None;
         }
     }
 
@@ -381,22 +504,28 @@ pub fn prepare_tick(world: &mut World) -> bool {
         world.resource_mut::<TickCmds>().0 = cmds.into_iter().map(|c| (me, c)).collect();
         return true;
     }
+    let now = world.resource::<Time<Real>>().elapsed_secs_f64();
+    world.resource_mut::<Net>().now = now;
     poll(world);
     let tick = world.resource::<SimClock>().tick;
     let me = me();
-    let mut msg = None;
+    let mut msgs = Vec::new();
     let ready = {
-        let pending = std::mem::take(&mut world.resource_mut::<Outbox>().0);
+        let mut pending = std::mem::take(&mut world.resource_mut::<Outbox>().0);
         let mut net = world.resource_mut::<Net>();
         if !net.started() {
             // Eingaben vor dem Start verwerfen
             false
         } else {
-            let target = tick + DELAY;
-            if !net.lockstep.scheduled(me, target) {
-                msg = net.lockstep.schedule(me, target, pending);
-            } else if !pending.is_empty() {
-                // schon eingeplant (der Tick wartete): für den nächsten Tick aufheben
+            // Antwortzeit messen (zweimal pro Sekunde) und die Verzögerung danach richten
+            if now - net.last_ping >= 0.5 {
+                net.last_ping = now;
+                msgs.push(Lockstep::ping(now));
+            }
+            net.adapt_delay();
+            msgs.extend(net.lockstep.fill(me, tick, &mut pending));
+            if !pending.is_empty() {
+                // noch kein Tick frei (der Tick wartete oder die Verzögerung sank): aufheben
                 world.resource_mut::<Outbox>().0 = pending;
                 net = world.resource_mut::<Net>();
             }
@@ -414,7 +543,7 @@ pub fn prepare_tick(world: &mut World) -> bool {
             }
         }
     };
-    if let Some(m) = msg {
+    for m in msgs {
         send(world, m);
     }
     ready
@@ -439,7 +568,8 @@ pub fn after_tick(world: &mut World) {
     }
     let m = net.lockstep.own_hash(me(), t, h);
     if t % 200 == 0 {
-        info!("Duell: Tick {t}, Prüfsumme {h:016x}");
+        let ping = net.rtt.map_or(-1.0, |r| r * 1000.0);
+        info!("Duell: Tick {t}, Prüfsumme {h:016x}, Ping {ping:.0} ms, Verzögerung {} Ticks", net.lockstep.delay);
     }
     if let Some(d) = net.lockstep.desync
         && !matches!(net.status, Status::Failed(_))
@@ -456,7 +586,8 @@ pub fn ticks_behind(world: &World) -> u32 {
     let Some(net) = world.get_resource::<Net>() else { return 0 };
     let Some(peer) = net.lockstep.peer_tick else { return 0 };
     let tick = world.get_resource::<SimClock>().map_or(0, |c| c.tick);
-    peer.saturating_sub(DELAY).saturating_sub(tick)
+    // Der Mitspieler plant mit etwa derselben Verzögerung wie dieser Rechner
+    peer.saturating_sub(net.lockstep.delay).saturating_sub(tick)
 }
 
 /// Wartezeit mitzählen (für die Anzeige „Warte auf Mitspieler“)

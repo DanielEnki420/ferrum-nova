@@ -127,11 +127,15 @@ struct Peer {
     team: Team,
     ls: Lockstep,
     hashes: Vec<(u32, u64)>,
+    /// Befehle, die noch auf einen freien Tick warten
+    pending: Vec<Cmd>,
+    /// Tick, für den die Eingaben schon erzeugt wurden
+    scripted: Option<u32>,
 }
 
 impl Peer {
     fn new(team: Team) -> Self {
-        Peer { app: duel_app(), team, ls: Lockstep::new(), hashes: Vec::new() }
+        Peer { app: duel_app(), team, ls: Lockstep::new(), hashes: Vec::new(), pending: Vec::new(), scripted: None }
     }
     fn tick(&self) -> u32 {
         self.app.world().resource::<SimClock>().tick
@@ -139,10 +143,12 @@ impl Peer {
     /// Einen Tick versuchen; Nachrichten an den Mitspieler landen in `out`
     fn try_tick(&mut self, out: &mut VecDeque<Vec<u8>>) -> bool {
         let t = self.tick();
-        if !self.ls.scheduled(self.team, t + DELAY) {
+        if self.scripted != Some(t) {
+            self.scripted = Some(t);
             let cmds = script(self.app.world_mut(), self.team, t);
-            out.extend(self.ls.schedule(self.team, t + DELAY, cmds));
+            self.pending.extend(cmds);
         }
+        out.extend(self.ls.fill(self.team, t, &mut self.pending));
         let Some(cmds) = self.ls.take(t) else { return false };
         self.app.world_mut().resource_mut::<TickCmds>().0 = cmds;
         sim::run_tick(self.app.world_mut());
@@ -160,6 +166,17 @@ impl Peer {
 /// Am Ende stimmen alle Prüfsummen überein, und es wurde wirklich gekämpft.
 #[test]
 fn two_simulations_stay_in_sync_over_the_lockstep() {
+    run_pair(false);
+}
+
+/// Wie oben, aber beide Seiten ändern ihre Eingabeverzögerung ständig und unabhängig
+/// voneinander (2 bis 8 Ticks, wie bei schwankendem Ping): Die Spielstände bleiben gleich.
+#[test]
+fn changing_delays_keep_the_simulations_in_sync() {
+    run_pair(true);
+}
+
+fn run_pair(vary: bool) {
     let mut a = Peer::new(PLAYER);
     let mut b = Peer::new(ENEMY);
     // Leitungen mit Verzögerung (Nachrichten bleiben in Reihenfolge, wie beim WebSocket)
@@ -169,6 +186,10 @@ fn two_simulations_stay_in_sync_over_the_lockstep() {
     let mut stalls = 0;
     while a.tick() < end || b.tick() < end {
         step += 1;
+        if vary {
+            a.ls.delay = MIN_DELAY + (step / 97) % (MAX_DELAY - MIN_DELAY + 1);
+            b.ls.delay = MAX_DELAY - (step / 61) % (MAX_DELAY - MIN_DELAY + 1);
+        }
         // A: ein Tick je Schritt, B: unregelmäßig (wie wechselnde Bildraten)
         let mut out = VecDeque::new();
         if a.tick() < end && !a.try_tick(&mut out) {
@@ -317,4 +338,56 @@ fn interpolation_restores_sim_positions_exactly() {
     assert!(moved > 0);
     app.world_mut().run_system_once(sim::interp_restore).unwrap();
     assert_eq!(sim::state_hash(app.world_mut()), before);
+}
+
+/// Verzögerung aus der Antwortzeit: kurzer Ping → wenig Puffer, langer Ping → mehr,
+/// runter erst nach ruhigen 3 Sekunden, Ping-Nachrichten kommen zurück
+#[test]
+fn delay_follows_the_measured_ping() {
+    let mut n = Net::duel("r".into(), "k".into());
+    assert_eq!(n.wanted_delay(), DELAY, "ohne Messung bleibt es beim Start");
+    for _ in 0..30 {
+        n.note_rtt(0.030);
+    }
+    assert_eq!(n.wanted_delay(), MIN_DELAY, "30 ms Ping: 2 Ticks");
+    n.status = Status::Running;
+    n.now = 10.0;
+    n.adapt_delay();
+    assert_eq!(n.lockstep.delay, DELAY, "nicht sofort kleiner");
+    n.now = 13.5;
+    n.adapt_delay();
+    assert_eq!(n.lockstep.delay, DELAY - 1, "nach 3 s einen Tick kleiner");
+    for _ in 0..30 {
+        n.note_rtt(0.400);
+    }
+    n.adapt_delay();
+    assert!(n.lockstep.delay >= 6, "400 ms Ping: sofort mehr Puffer, war {}", n.lockstep.delay);
+    // Ping → Pong
+    let mut out = Vec::new();
+    n.handle(link::Incoming::Binary(Lockstep::ping(1.25)), &mut out);
+    assert_eq!(out, vec![Lockstep::pong(1.25)]);
+    let mut m = Net::duel("r".into(), "k".into());
+    m.now = 1.30;
+    m.handle(link::Incoming::Binary(Lockstep::pong(1.25)), &mut out);
+    assert!((m.rtt.unwrap() - 0.05).abs() < 1e-9);
+}
+
+/// Befehle für erledigte oder weit entfernte Ticks werden verworfen (kein Speicherüberlauf)
+#[test]
+fn ticks_outside_the_window_are_refused() {
+    let mut a = Lockstep::new();
+    let mut b = Lockstep::new();
+    let far = b.schedule(ENEMY, 5000, vec![]).unwrap();
+    assert_eq!(a.receive(ENEMY, &far), Event::Bad);
+    let ok = b.schedule(ENEMY, DELAY, vec![]).unwrap();
+    assert_eq!(a.receive(ENEMY, &ok), Event::Nothing);
+    for t in 0..DELAY {
+        assert!(a.take(t).is_some());
+    }
+    let old = b.schedule(ENEMY, 1, vec![Cmd::Surrender]);
+    assert!(old.is_none() || a.receive(ENEMY, &old.unwrap()) == Event::Bad, "erledigter Tick");
+    let mut w = Writer::default();
+    w.u8(MSG_CMDS);
+    w.u32(1);
+    assert_eq!(a.receive(ENEMY, &w.0), Event::Bad);
 }

@@ -12,6 +12,10 @@
 const ROOM = /^[a-z0-9]{1,32}$/i;
 // Räume vergessen ihren Schlüssel nach einem Tag ohne Verbindung
 const FORGET_MS = 24 * 60 * 60 * 1000;
+// Schutz vor Missbrauch: Spielnachrichten sind klein (Befehle eines Ticks, Prüfsumme, Ping),
+// normal sind rund 25 pro Sekunde. Wer deutlich mehr oder Größeres schickt, fliegt raus.
+const MAX_BYTES = 64 * 1024;
+const MAX_PER_SECOND = 200;
 
 export class DuellRaum {
   constructor(state) {
@@ -58,12 +62,36 @@ export class DuellRaum {
   webSocketMessage(ws, message) {
     // Text von Spielern wird ignoriert; nur Spielnachrichten (binär) gehen weiter
     if (typeof message === 'string') return;
+    if (message.byteLength > MAX_BYTES || this.tooFast(ws)) {
+      try {
+        ws.close(1008, 'zu viel');
+      } catch {
+        // schon zu
+      }
+      this.webSocketClose(ws, 1008);
+      return;
+    }
     for (const other of this.state.getWebSockets()) {
       if (other !== ws) other.send(message);
     }
   }
 
+  // Nachrichten je Verbindung und Sekunde zählen (nur im Speicher; nach einem Ruhezustand
+  // des Objekts beginnt die Zählung neu, das reicht als Bremse)
+  tooFast(ws) {
+    this.rates ??= new Map();
+    const now = Date.now();
+    let r = this.rates.get(ws);
+    if (!r || now - r.start >= 1000) {
+      r = { start: now, n: 0 };
+      this.rates.set(ws, r);
+    }
+    r.n += 1;
+    return r.n > MAX_PER_SECOND;
+  }
+
   webSocketClose(ws, code) {
+    this.rates?.delete(ws);
     for (const other of this.state.getWebSockets()) {
       if (other !== ws) other.send(JSON.stringify({ t: 'peer', here: false }));
     }

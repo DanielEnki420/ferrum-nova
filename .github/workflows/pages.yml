@@ -29,8 +29,14 @@ jobs:
         with:
           workspaces: game
       - name: Trunk installieren
+        # feste Version mit Prüfsumme: ein verändertes Archiv bricht den Build ab
+        env:
+          TRUNK_SHA256: 26fca8a9952e46cd7d8b8b9a2e2c1786c090fc14b8e10b6678ab4d0f9f1a385f
         run: |
-          curl -sSL https://github.com/trunk-rs/trunk/releases/download/v0.22.2/trunk-x86_64-unknown-linux-gnu.tar.gz | tar -xz -C /usr/local/bin
+          curl -sSLf -o trunk.tgz https://github.com/trunk-rs/trunk/releases/download/v0.22.2/trunk-x86_64-unknown-linux-gnu.tar.gz
+          echo "$TRUNK_SHA256  trunk.tgz" | sha256sum -c -
+          tar -xzf trunk.tgz -C /usr/local/bin
+          rm trunk.tgz
           trunk --version
       - name: Spiel bauen
         working-directory: game

@@ -1,0 +1,12 @@
+# Wöchentlich nach Updates für die GitHub Actions und Rust-Abhängigkeiten schauen.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+  - package-ecosystem: cargo
+    directory: /game
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 3
