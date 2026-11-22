@@ -450,6 +450,22 @@ struct Spawner<'a, 'w, 's> {
     c: &'a mut Commands<'w, 's>,
     kit: &'a FxKit,
     rng: &'a mut Rng,
+    /// So viele Lichtblitze dürfen noch dazukommen (WebGL verkraftet nur wenige Punktlichter)
+    lights: usize,
+}
+
+/// Höchstzahl gleichzeitiger Lichtblitze. Jedes Punktlicht kostet in jedem Bildpunkt Rechenzeit;
+/// bei zu vielen (große Mauer: 100 Baustellen schweißen gleichzeitig) setzt der Grafiktreiber
+/// den WebGL-Kontext zurück und das Bild wird schwarz.
+const MAX_FLASHES: usize = 10;
+/// Höchstens so viele Baustellen schweißen je Funkenrunde (alle 0,1 s)
+const MAX_WELDS: usize = 4;
+/// Staub von Baustellen je Bild: Mauern entstehen zu Dutzenden gleichzeitig
+const MAX_BUILD_DUST: usize = 3;
+const MAX_PUFFS: usize = 6;
+
+fn light_budget(flashes: &Query<(), With<Flash>>) -> usize {
+    MAX_FLASHES.saturating_sub(flashes.iter().count())
 }
 
 impl Spawner<'_, '_, '_> {
@@ -587,6 +603,10 @@ impl Spawner<'_, '_, '_> {
     }
 
     fn flash_col(&mut self, pos: Vec3, intensity: f32, life: f32, range: f32, color: Color) {
+        if self.lights == 0 {
+            return;
+        }
+        self.lights -= 1;
         self.c.spawn((
             PointLight {
                 color,
@@ -787,9 +807,27 @@ pub fn spawn_effects(
     kit: Res<FxKit>,
     models: Res<ModelKit>,
     mut rng: ResMut<Rng>,
+    flashes: Query<(), With<Flash>>,
 ) {
-    let mut s = Spawner { c: &mut commands, kit: &kit, rng: &mut rng };
+    let mut s = Spawner { c: &mut commands, kit: &kit, rng: &mut rng, lights: light_budget(&flashes) };
+    let (mut dust, mut puffs) = (0, 0);
     for ev in events.read() {
+        // Baustellen-Staub begrenzen: eine lange Mauer meldet Dutzende Baustellen im selben Bild
+        match ev {
+            FxEvent::BuildDust { .. } => {
+                dust += 1;
+                if dust > MAX_BUILD_DUST {
+                    continue;
+                }
+            }
+            FxEvent::Puff { .. } => {
+                puffs += 1;
+                if puffs > MAX_PUFFS {
+                    continue;
+                }
+            }
+            _ => {}
+        }
         match *ev {
             FxEvent::Muzzle { pos, dir, caliber } => s.muzzle(pos, dir, caliber),
             FxEvent::Launch { pos, dir } => {
@@ -1010,10 +1048,11 @@ pub fn update_wrecks(
     time: Res<Time>,
     kit: Res<FxKit>,
     mut rng: ResMut<Rng>,
+    flashes: Query<(), With<Flash>>,
     mut q: Query<(Entity, &mut Wreck, &mut Transform)>,
 ) {
     let dt = time.delta_secs();
-    let mut s = Spawner { c: &mut commands, kit: &kit, rng: &mut rng };
+    let mut s = Spawner { c: &mut commands, kit: &kit, rng: &mut rng, lights: light_budget(&flashes) };
     for (e, mut w, mut t) in &mut q {
         w.age += dt;
         w.timer -= dt;
@@ -1080,10 +1119,11 @@ pub fn update_collapse(
     time: Res<Time>,
     kit: Res<FxKit>,
     mut rng: ResMut<Rng>,
+    flashes: Query<(), With<Flash>>,
     mut q: Query<(Entity, &mut Collapse, &mut Transform)>,
 ) {
     let dt = time.delta_secs().min(0.05);
-    let mut s = Spawner { c: &mut commands, kit: &kit, rng: &mut rng };
+    let mut s = Spawner { c: &mut commands, kit: &kit, rng: &mut rng, lights: light_budget(&flashes) };
     for (e, mut c, mut t) in &mut q {
         c.age += dt;
         c.timer -= dt;
@@ -1139,6 +1179,7 @@ pub fn ambient_fx(
     kit: Res<FxKit>,
     models: Res<ModelKit>,
     mut rng: ResMut<Rng>,
+    flashes: Query<(), With<Flash>>,
     mut timer: Local<f32>,
     structures: Query<(&Transform, &Structure, &Team, Option<&Construction>)>,
     nodes: Query<(&Transform, &ResourceNode)>,
@@ -1148,16 +1189,18 @@ pub fn ambient_fx(
         return;
     }
     *timer = 0.1;
-    let mut s = Spawner { c: &mut commands, kit: &kit, rng: &mut rng };
+    let mut s = Spawner { c: &mut commands, kit: &kit, rng: &mut rng, lights: light_budget(&flashes) };
+    let mut welds = 0;
     for (t, st, team, cons) in &structures {
         let sm = &models.structures[st.0.idx()][team.0 as usize];
         match cons {
             Some(c) => {
                 // Schweißen an der schon sichtbaren Höhe des wachsenden Gebäudes
                 let top = sm.height * (1.0 - (1.0 - c.progress) * (1.0 - c.progress));
-                if top < 0.6 || s.rng.next_f32() > 0.8 {
+                if top < 0.6 || welds >= MAX_WELDS || s.rng.next_f32() > 0.8 {
                     continue;
                 }
+                welds += 1;
                 // am Rand, damit die Wände den Lichtbogen nicht verdecken
                 let a = s.rng.range(0.0, TAU);
                 let r = st.0.radius() * s.rng.range(0.75, 0.95);
