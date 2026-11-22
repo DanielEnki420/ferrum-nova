@@ -13,6 +13,10 @@ Alle Bodentexturen stammen von [ambientCG](https://ambientcg.com) und stehen unt
 
 Lizenz: https://creativecommons.org/publicdomain/zero/1.0/
 
+## Schrift
+
+Alle Texte im Spiel nutzen **Fira Mono Regular** von Mozilla und Telefónica ([github.com/mozilla/Fira](https://github.com/mozilla/Fira)), unverändert als `game/fonts/FiraMono-Regular.ttf`. Lizenz: **SIL Open Font License 1.1**, der vollständige Text liegt in `game/fonts/FiraMono-OFL.txt`.
+
 ## Alles andere
 
 Fahrzeuge, Gebäude, Vegetation, Gelände-Relief, Effekte und Shader sind im Code dieses Projekts erzeugt.

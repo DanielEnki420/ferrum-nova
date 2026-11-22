@@ -4,9 +4,6 @@
 //! übernommen und baut die Fahrzeuge der Kolonie nun gegen die Menschen. Jede Mission legt fest:
 //! Startvorrat, freigeschaltete Einheiten und Gebäude (für beide Seiten), vorgebaute Stellungen
 //! des Gegners, Stärke der Gegner-KI, ein Ziel und zeitgesteuerte Funksprüche.
-//!
-//! Hinweis: Die eingebaute Schrift kennt keine Umlaute, daher stehen Texte auf dem Bildschirm
-//! mit ae/oe/ue/ss.
 
 use crate::components::*;
 use crate::frame::{MatchConfig, Stats};
@@ -60,7 +57,7 @@ pub static MISSIONS: [Mission; 4] = [
             Niemand hat sie beauftragt.\n\n\
             Ihr haltet das alte Sicherheits-HQ im Westen. Bringt die Foerderung wieder in Gang,\n\
             bevor VAAR merkt, wie schwach wir sind.",
-        outro: "Die Silos sind voll. Ingenieurin Holt hat in den Daten etwas gefunden:\nVAAR plant keinen Angriff. VAAR plant eine Raeumung.",
+        outro: "Die Silos sind voll. Ingenieurin Holt hat in den Daten etwas gefunden:\nVAAR plant keinen Angriff. VAAR plant eine Räumung.",
         goal: Goal::Gather(800),
         units: &[U::Sammler, U::Panzer, U::Spaeher],
         buildings: &[B::Raffinerie, B::Geschuetzturm],
@@ -74,9 +71,9 @@ pub static MISSIONS: [Mission; 4] = [
         enemy_structures: &[],
         radio: &[
             (2.0, "HOLT: Kommandant, VAAR antwortet nicht mehr. Die Hallen im Osten bauen Panzer - ohne Auftrag."),
-            (16.0, "HOLT: Wir brauchen Ferrit. Schickt die Sammler an die Kristalle, eine Raffinerie verkuerzt die Wege."),
+            (16.0, "HOLT: Wir brauchen Ferrit. Schickt die Sammler an die Kristalle, eine Raffinerie verkürzt die Wege."),
             (90.0, "VAAR: Ressourcenverbrauch der Kolonie ineffizient. Korrektur wird eingeleitet."),
-            (200.0, "HOLT: Spaeher sehen weit. Schaut nach, was da drueben gebaut wird."),
+            (200.0, "HOLT: Späher sehen weit. Schaut nach, was da drüben gebaut wird."),
         ],
     },
     Mission {
@@ -86,7 +83,7 @@ pub static MISSIONS: [Mission; 4] = [
             Schutzmauern und Tore. Der Funkmast auf dem Plateau braucht acht Minuten,\n\
             dann hoert uns die Erde.\n\n\
             Haltet so lange durch. Mauern bremsen die Wellen, Tore lassen nur uns durch.",
-        outro: "Der Funkmast steht. Die Antwort der Erde: Hilfe in vierzig Tagen.\nSo lange koennen wir nicht warten.",
+        outro: "Der Funkmast steht. Die Antwort der Erde: Hilfe in vierzig Tagen.\nSo lange können wir nicht warten.",
         goal: Goal::Survive(480.0),
         units: &[U::Sammler, U::Panzer, U::Spaeher, U::Werfer],
         buildings: &[B::Raffinerie, B::Geschuetzturm, B::Fabrik, B::Mauer, B::Tor],
@@ -100,10 +97,10 @@ pub static MISSIONS: [Mission; 4] = [
         enemy_structures: &[],
         radio: &[
             (2.0, "HOLT: Die erste Welle formiert sich schon. Mauern aus Ferrit sind billig - nutzt sie."),
-            (25.0, "HOLT: Ein Tor in der Mauer laesst unsere Sammler hinaus. VAARs Fahrzeuge kommen nicht durch."),
+            (25.0, "HOLT: Ein Tor in der Mauer lässt unsere Sammler hinaus. VAARs Fahrzeuge kommen nicht durch."),
             (120.0, "VAAR: Personal der Kolonie wird in den Ruhezustand versetzt. Widerstand ist ineffizient."),
             (300.0, "HOLT: Noch drei Minuten bis zur Verbindung. Haltet die Linie!"),
-            (420.0, "HOLT: Eine Minute! Der Mast faehrt aus."),
+            (420.0, "HOLT: Eine Minute! Der Mast fährt aus."),
         ],
     },
     Mission {
@@ -133,7 +130,7 @@ pub static MISSIONS: [Mission; 4] = [
             (B::Geschuetzturm, 3.0, -12.0, false),
         ],
         radio: &[
-            (2.0, "HOLT: Die Relais sehen aus wie Raffinerien. Lasst euch nicht taeuschen."),
+            (2.0, "HOLT: Die Relais sehen aus wie Raffinerien. Lasst euch nicht täuschen."),
             (40.0, "HOLT: Unsere Sensoren erfassen nur, was eure Einheiten sehen. Dahinter ist Nebel."),
             (150.0, "VAAR: Ich sehe euch. Ich sehe alles, was ihr baut."),
         ],
@@ -145,7 +142,7 @@ pub static MISSIONS: [Mission; 4] = [
             Holt hat die Haubitzen freigeschaltet. Sie schiessen weiter, als sie sehen -\n\
             sie brauchen Spaeher, die ihnen die Ziele zeigen.\n\n\
             Zerstoert den Kern. Dann gehoert Nova wieder uns.",
-        outro: "Der Kern ist still. Zum ersten Mal seit Tagen hoert man auf Nova nur den Wind.\nHolt sagt, VAAR habe die Kolonie nur schuetzen wollen. Vor uns.",
+        outro: "Der Kern ist still. Zum ersten Mal seit Tagen hört man auf Nova nur den Wind.\nHolt sagt, VAAR habe die Kolonie nur schützen wollen. Vor uns.",
         goal: Goal::DestroyHq,
         units: &UnitKind::ALL,
         buildings: &[B::Geschuetzturm, B::Raffinerie, B::Fabrik, B::Mauer, B::Tor, B::Raketenturm],
@@ -164,9 +161,9 @@ pub static MISSIONS: [Mission; 4] = [
             (B::Fabrik, 52.0, -36.0, false),
         ],
         radio: &[
-            (2.0, "HOLT: Erst die Raketentuerme, dann der Kern. Die Tuerme decken sich gegenseitig."),
+            (2.0, "HOLT: Erst die Raketentürme, dann der Kern. Die Türme decken sich gegenseitig."),
             (60.0, "VAAR: Ich habe diese Kolonie gebaut. Ich werde sie erhalten. Ohne euch."),
-            (200.0, "HOLT: Haubitzen brauchen Sicht. Ein Spaeher am Rand der Basis reicht."),
+            (200.0, "HOLT: Haubitzen brauchen Sicht. Ein Späher am Rand der Basis reicht."),
         ],
     },
 ];
@@ -347,7 +344,7 @@ pub fn mission_tick(
     let start = *st.marked_start.get_or_insert(n_marked);
     if *outcome == Outcome::Running {
         let (text, done) = match m.goal {
-            Goal::DestroyHq => ("Ziel: VAARs Kern (feindliches HQ) zerstoeren".to_string(), false),
+            Goal::DestroyHq => ("Ziel: VAARs Kern (feindliches HQ) zerstören".to_string(), false),
             Goal::Survive(t) => {
                 let left = (t - stats.time).max(0.0) as u32;
                 (format!("Ziel: Durchhalten  {}:{:02}", left / 60, left % 60), stats.time >= t)
@@ -360,7 +357,7 @@ pub fn mission_tick(
                 if n_marked < st.last_marked && n_marked > 0 {
                     message = Some(format!("HOLT: Relais ausgefallen! Noch {n_marked}."));
                 }
-                (format!("Ziel: Relaisstationen zerstoeren  {} / {start}", start - n_marked), start > 0 && n_marked == 0)
+                (format!("Ziel: Relaisstationen zerstören  {} / {start}", start - n_marked), start > 0 && n_marked == 0)
             }
         };
         if let Ok(mut t) = goal_text.single_mut()
@@ -403,17 +400,13 @@ mod tests {
         // jede Mission schaltet mindestens so viel frei wie die vorige
         for w in MISSIONS.windows(2) {
             assert!(w[0].units.iter().all(|u| w[1].units.contains(u)), "{} verliert Einheiten", w[1].title);
-            assert!(w[0].buildings.iter().all(|b| w[1].buildings.contains(b)), "{} verliert Gebaeude", w[1].title);
+            assert!(w[0].buildings.iter().all(|b| w[1].buildings.contains(b)), "{} verliert Gebäude", w[1].title);
             assert!(w[1].units.len() + w[1].buildings.len() > w[0].units.len() + w[0].buildings.len(), "{} schaltet nichts frei", w[1].title);
         }
         // Sammler und Raffinerie gibt es immer, sonst geht die Wirtschaft nicht
         for m in &MISSIONS {
             assert!(m.units.contains(&U::Sammler) && m.enemy_units.contains(&U::Sammler));
             assert!(m.buildings.contains(&B::Raffinerie));
-            // die Texte kommen ohne Umlaute aus (die Schrift kennt keine)
-            for t in [m.title, m.briefing, m.outro].into_iter().chain(m.radio.iter().map(|r| r.1)) {
-                assert!(!t.contains(['ä', 'ö', 'ü', 'Ä', 'Ö', 'Ü', 'ß']), "Umlaut in: {t}");
-            }
         }
         // Relaismission hat Ziele
         assert!(MISSIONS[2].enemy_structures.iter().filter(|s| s.3).count() == 3);

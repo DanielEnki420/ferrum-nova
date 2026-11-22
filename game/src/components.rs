@@ -52,7 +52,7 @@ impl UnitKind {
             UnitKind::Sammler => "Sammler",
             UnitKind::Panzer => "Panzer",
             UnitKind::Werfer => "Raketenwerfer",
-            UnitKind::Spaeher => "Spaeher",
+            UnitKind::Spaeher => "Späher",
             UnitKind::Bollwerk => "Bollwerk",
             UnitKind::Haubitze => "Haubitze",
         }
@@ -290,7 +290,7 @@ impl BuildingKind {
     }
     pub fn name(self) -> &'static str {
         match self {
-            BuildingKind::Geschuetzturm => "Geschuetzturm",
+            BuildingKind::Geschuetzturm => "Geschützturm",
             BuildingKind::Raffinerie => "Raffinerie",
             BuildingKind::Fabrik => "Fabrik",
             BuildingKind::Mauer => "Mauer",
@@ -300,7 +300,7 @@ impl BuildingKind {
     }
     pub fn short_name(self) -> &'static str {
         match self {
-            BuildingKind::Geschuetzturm => "Geschuetz",
+            BuildingKind::Geschuetzturm => "Geschütz",
             BuildingKind::Raketenturm => "Raketen",
             k => k.name(),
         }

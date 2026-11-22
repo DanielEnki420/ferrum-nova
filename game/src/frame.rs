@@ -41,9 +41,9 @@ impl Difficulty {
     }
     fn hint(self) -> &'static str {
         match self {
-            Difficulty::Leicht => "Zum Kennenlernen: Der Gegner sammelt langsam, greift spaet und mit kleinen Wellen an.",
+            Difficulty::Leicht => "Zum Kennenlernen: Der Gegner sammelt langsam, greift spät und mit kleinen Wellen an.",
             Difficulty::Normal => "Ausgewogen: genug Zeit zum Aufbauen, dann wachsender Druck.",
-            Difficulty::Schwer => "Der Gegner sammelt schneller und greift frueh an.",
+            Difficulty::Schwer => "Der Gegner sammelt schneller und greift früh an.",
         }
     }
     /// Faktor auf jede Ladung, die die Gegner-KI abliefert
@@ -515,11 +515,11 @@ pub fn setup_frame(mut commands: Commands, cfg: Res<MatchConfig>) {
         children![
             (text("PAUSE", 44.0, ACCENT), Node { margin: UiRect::bottom(px(14)), ..default() }),
             button(FrameButton::Resume, "Weiter  [P]", 260.0),
-            (text("Das Duell laeuft weiter.", 13.0, DIM), DuelOnly),
+            (text("Das Duell läuft weiter.", 13.0, DIM), DuelOnly),
             button(FrameButton::Help, "Steuerung", 260.0),
             (button(FrameButton::Again, "Neu beginnen", 260.0), SoloOnly),
             (button(FrameButton::Surrender, "Aufgeben", 260.0), DuelOnly),
-            button(FrameButton::Menu, "Hauptmenue", 260.0),
+            button(FrameButton::Menu, "Hauptmenü", 260.0),
             sound_row(),
             era_row(),
         ],
@@ -543,9 +543,9 @@ pub fn setup_frame(mut commands: Commands, cfg: Res<MatchConfig>) {
             (
                 Node { flex_direction: FlexDirection::Row, ..default() },
                 children![
-                    (button(FrameButton::NextMission, "Naechste Mission", 220.0), NextButton),
+                    (button(FrameButton::NextMission, "Nächste Mission", 220.0), NextButton),
                     (button(FrameButton::Again, "Nochmal", 200.0), SoloOnly),
-                    button(FrameButton::Menu, "Hauptmenue", 200.0),
+                    button(FrameButton::Menu, "Hauptmenü", 200.0),
                 ],
             ),
         ],
@@ -598,7 +598,7 @@ pub fn setup_frame(mut commands: Commands, cfg: Res<MatchConfig>) {
                     b.insert(Locked);
                 }
             }
-            c.spawn(button(FrameButton::Campaign, "Zurueck", 300.0));
+            c.spawn(button(FrameButton::Campaign, "Zurück", 300.0));
         });
     });
 
@@ -608,7 +608,7 @@ pub fn setup_frame(mut commands: Commands, cfg: Res<MatchConfig>) {
         let prev = n.checked_sub(2).map(|i| &crate::campaign::MISSIONS[i]);
         let mut new: Vec<&str> = m.units.iter().filter(|u| prev.is_none_or(|p| !p.units.contains(u))).map(|u| u.short_name()).collect();
         new.extend(m.buildings.iter().filter(|b| prev.is_none_or(|p| !p.buildings.contains(b))).map(|b| b.short_name()));
-        let unlocked = format!("Verfuegbar neu: {}", new.join(", "));
+        let unlocked = format!("Verfügbar neu: {}", new.join(", "));
         commands.spawn(overlay(BriefingPanel, 50)).with_children(|root| {
             root.spawn(card()).with_children(|c| {
                 c.spawn(text(format!("MISSION {n}"), 18.0, DIM));
@@ -617,7 +617,7 @@ pub fn setup_frame(mut commands: Commands, cfg: Res<MatchConfig>) {
                 c.spawn((text(unlocked, 14.0, Color::srgb(1.0, 0.85, 0.45)), Node { margin: UiRect::bottom(px(16)), ..default() }));
                 c.spawn(Node { flex_direction: FlexDirection::Row, ..default() }).with_children(|row| {
                     row.spawn(button(FrameButton::StartMission, "Mission starten", 240.0));
-                    row.spawn(button(FrameButton::Menu, "Hauptmenue", 200.0));
+                    row.spawn(button(FrameButton::Menu, "Hauptmenü", 200.0));
                 });
             });
         });
@@ -886,7 +886,7 @@ pub fn update_frame(
         if let Ok(mut t) = story.single_mut() {
             **t = match (mission, won) {
                 (Some(m), true) => m.outro.into(),
-                (Some(_), false) => "Das HQ ist gefallen. VAAR hat die Kolonie zurueckerobert.".into(),
+                (Some(_), false) => "Das HQ ist gefallen. VAAR hat die Kolonie zurückerobert.".into(),
                 (None, _) if left => "Dein Gegner hat das Duell verlassen.".into(),
                 (None, _) => String::new(),
             };
@@ -897,8 +897,8 @@ pub fn update_frame(
         let rows: [(&str, [u32; 2]); 6] = [
             ("Einheiten gebaut", stats.units_built),
             ("Einheiten verloren", stats.units_lost),
-            ("Gebaeude errichtet", stats.structures_built),
-            ("Gebaeude verloren", stats.structures_lost),
+            ("Gebäude errichtet", stats.structures_built),
+            ("Gebäude verloren", stats.structures_lost),
             ("Ferrit gesammelt", [stats.gathered[0][0], stats.gathered[1][0]]),
             ("Plasma gesammelt", [stats.gathered[0][1], stats.gathered[1][1]]),
         ];
@@ -969,7 +969,7 @@ pub fn duel_flow(
     }
     let (show, msg, link) = match net.status {
         Status::Connecting => (true, "Verbinde mit dem Duell-Server …".to_string(), true),
-        Status::WaitingForPeer => (true, "Warte auf deinen Mitspieler. Sobald er den Link oeffnet, beginnt das Duell.".into(), true),
+        Status::WaitingForPeer => (true, "Warte auf deinen Mitspieler. Sobald er den Link öffnet, beginnt das Duell.".into(), true),
         Status::Failed(why) => (true, why.to_string(), false),
         Status::PeerLeft if *phase == Phase::Menu => (true, "Dein Mitspieler ist gegangen.".into(), false),
         _ => (false, String::new(), false),

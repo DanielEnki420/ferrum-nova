@@ -322,7 +322,7 @@ pub fn update_hud(
         format!("{} versetzen: Linksklick an der neuen Stelle (baut sich in halber Zeit neu auf) | Rechtsklick/Esc: abbrechen", k.name())
     } else if placing.kind == Some(BuildingKind::Mauer) {
         match placing.line_info {
-            Some((n, c)) if n > 1 || c[0] > 0 => format!("Mauer: {n} Stuecke, {} F | Klick: bauen | Shift+Klick: weiterziehen | Rechtsklick/Esc: Linie verwerfen", c[0]),
+            Some((n, c)) if n > 1 || c[0] > 0 => format!("Mauer: {n} Stücke, {} F | Klick: bauen | Shift+Klick: weiterziehen | Rechtsklick/Esc: Linie verwerfen", c[0]),
             _ => "Mauer: Startpunkt klicken, dann Endpunkt | Rechtsklick/Esc: abbrechen".to_string(),
         }
     } else if placing.kind == Some(BuildingKind::Tor) {
@@ -330,7 +330,7 @@ pub fn update_hud(
     } else if let Some(k) = placing.kind {
         format!("{} platzieren: Linksklick | Shift: mehrere | Rechtsklick/Esc: abbrechen", k.name())
     } else if mode.left_commands && counts.iter().sum::<i32>() == 0 && selected_hq.iter().any(|t| *t == crate::net::me()) {
-        "Hauptquartier: Klick ins Gelaende setzt den Sammelpunkt | Rechtsklick: Auswahl aufheben".to_string()
+        "Hauptquartier: Klick ins Gelände setzt den Sammelpunkt | Rechtsklick: Auswahl aufheben".to_string()
     } else if counts.iter().sum::<i32>() == 0 && selected_hq.iter().any(|t| *t == crate::net::me()) {
         "Hauptquartier: Rechtsklick setzt den Sammelpunkt (auf einem Feld: Sammler bauen dort ab)".to_string()
     } else if !own_buildings.is_empty() && counts.iter().sum::<i32>() == 0 {
@@ -338,17 +338,17 @@ pub fn update_hud(
         match own_buildings[..] {
             [k] => {
                 let wall = if k == BuildingKind::Mauer { " | Doppelklick: ganze Mauer" } else { "" };
-                format!("{}: Entf abreissen (+{} F / {} P zurueck) | O versetzen | Shift+Klick: weitere dazu{wall}", k.name(), back[0], back[1])
+                format!("{}: Entf abreißen (+{} F / {} P zurück) | O versetzen | Shift+Klick: weitere dazu{wall}", k.name(), back[0], back[1])
             }
-            _ => format!("{} Gebaeude: Entf alle abreissen (+{} F / {} P zurueck) | Shift+Klick: weitere dazu", own_buildings.len(), back[0], back[1]),
+            _ => format!("{} Gebäude: Entf alle abreißen (+{} F / {} P zurück) | Shift+Klick: weitere dazu", own_buildings.len(), back[0], back[1]),
         }
     } else if counts.iter().sum::<i32>() == 0 {
         let mode_hint = if mode.left_commands { "L: Zweitasten-Steuerung" } else { "L: Einknopf-Steuerung" };
-        format!("Links: auswaehlen | Doppelklick: gleicher Typ | F: alle Kampfeinheiten | 1-9: Gruppe abrufen | {mode_hint}")
+        format!("Links: auswählen | Doppelklick: gleicher Typ | F: alle Kampfeinheiten | 1-9: Gruppe abrufen | {mode_hint}")
     } else if mode.left_commands {
-        "Klick: bewegen/angreifen | Rechtsklick: Auswahl aufheben | Shift: anhaengen | Strg: Angriffsmarsch\nAlt: Patrouille | R: Stopp | T: Stellung halten | Strg+1-9: Gruppe speichern | L: Zweitasten".to_string()
+        "Klick: bewegen/angreifen | Rechtsklick: Auswahl aufheben | Shift: anhängen | Strg: Angriffsmarsch\nAlt: Patrouille | R: Stopp | T: Stellung halten | Strg+1-9: Gruppe speichern | L: Zweitasten".to_string()
     } else {
-        "Rechts: bewegen/angreifen | ziehen: Frontlinie | Shift: anhaengen | Strg: Angriffsmarsch\nAlt: Patrouille | R: Stopp | T: Stellung halten | Strg+1-9: Gruppe speichern | L: Einknopf".to_string()
+        "Rechts: bewegen/angreifen | ziehen: Frontlinie | Shift: anhängen | Strg: Angriffsmarsch\nAlt: Patrouille | R: Stopp | T: Stellung halten | Strg+1-9: Gruppe speichern | L: Einknopf".to_string()
     };
     if let Ok(mut t) = texts.p2().single_mut() {
         **t = sel_text;

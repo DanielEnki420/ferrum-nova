@@ -15,7 +15,7 @@ bevy = { version = "0.20.1", default-features = false, features = [
     "webgl2",
     "x11",
     "wayland",
-    "default_font",
+    # Schrift: eigene Fira Mono mit Umlauten (game/fonts), nicht Bevys Teilmenge ohne Umlaute
     "bevy_camera",
     "bevy_color",
     "bevy_gizmos",

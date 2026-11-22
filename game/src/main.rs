@@ -58,7 +58,14 @@ fn main() {
             // Im Browser keine .meta-Dateien anfragen (spart 404-Anfragen)
             meta_check: bevy::asset::AssetMetaCheck::Never,
             ..default()
-        }))
+        }));
+    // Standardschrift für alle Texte: vollständige Fira Mono (mit Umlauten, SIL Open Font License,
+    // game/fonts). Bevys eingebaute Teilmenge kennt nur ASCII.
+    app.world_mut()
+        .resource_mut::<Assets<Font>>()
+        .insert(AssetId::default(), Font::from_bytes(include_bytes!("../fonts/FiraMono-Regular.ttf").to_vec()))
+        .expect("Standardschrift");
+    app
         .add_plugins(MaterialPlugin::<splat::TerrainMaterial>::default())
         .add_plugins(MaterialPlugin::<vegetation::WindMaterial>::default())
         .add_plugins(UiMaterialPlugin::<era::RetroMaterial>::default())

@@ -71,7 +71,7 @@ pub fn flank_name(side: f32) -> &'static str {
     if side > 0.3 {
         "Nordwest-Flanke"
     } else if side < -0.3 {
-        "Suedost-Flanke"
+        "Südost-Flanke"
     } else {
         "Mitte"
     }
@@ -310,7 +310,7 @@ fn report_text(l: &Lesson, first: Option<f32>, mem: &VaarMemory) -> String {
         parts.push(format!("{} % {}", (l.mix[k.idx()] / total * 100.0).round(), k.name()));
     }
     if let Some(s) = l.side {
-        parts.push(format!("Angriffe ueber die {}", flank_name(s)));
+        parts.push(format!("Angriffe über die {}", flank_name(s)));
     }
     if let Some(t) = first {
         let t = t as u32;
@@ -322,7 +322,7 @@ fn report_text(l: &Lesson, first: Option<f32>, mem: &VaarMemory) -> String {
     if parts.is_empty() {
         parts.push("kaum etwas gesehen".into());
     }
-    format!("VAAR hat gelernt: {}   (Gefechte im Gedaechtnis: {})", parts.join("  |  "), mem.games)
+    format!("VAAR hat gelernt: {}   (Gefechte im Gedächtnis: {})", parts.join("  |  "), mem.games)
 }
 
 /// Zeile im Abschlussbildschirm (frame.rs)
@@ -405,9 +405,9 @@ pub fn taunts(
         let side_hit = mem.expected_side().filter(|s| obs.side_n > 0 && (obs.side_sum / obs.side_n as f32) * s > 0.1);
         let rush_hit = mem.expects_rush() && obs.first_strike.is_some_and(|f| f < RUSH_TIME);
         if let Some(s) = side_hit {
-            say = Some((T_PREDICT, format!("VAAR: Wie erwartet. Du kommst ueber die {}.", flank_name(s))));
+            say = Some((T_PREDICT, format!("VAAR: Wie erwartet. Du kommst über die {}.", flank_name(s))));
         } else if rush_hit {
-            say = Some((T_PREDICT, "VAAR: Ein frueher Angriff. Wie beim letzten Mal. Meine Tuerme stehen schon.".into()));
+            say = Some((T_PREDICT, "VAAR: Ein früher Angriff. Wie beim letzten Mal. Meine Türme stehen schon.".into()));
         } else {
             st.said |= T_PREDICT;
         }
