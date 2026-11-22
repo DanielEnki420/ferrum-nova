@@ -1007,11 +1007,9 @@ pub fn duel_flow(
 /// Ladehinweis der Webseite entfernen, sobald das erste Bild steht
 pub fn hide_loading(mut frames: Local<u32>) {
     *frames += 1;
-    if *frames != 3 {
-        return;
-    }
     #[cfg(target_arch = "wasm32")]
-    if let Some(doc) = web_sys::window().and_then(|w| w.document())
+    if *frames == 3
+        && let Some(doc) = web_sys::window().and_then(|w| w.document())
         && let Some(el) = doc.get_element_by_id("loading")
     {
         let _ = el.set_attribute("style", "display:none");

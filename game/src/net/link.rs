@@ -1,5 +1,6 @@
 //! Transport für das Duell: im Browser ein WebSocket zum Relay, in Tests ein Paar im Speicher.
 
+#[cfg(any(test, target_arch = "wasm32"))]
 use std::collections::VecDeque;
 #[cfg(test)]
 use std::sync::{Arc, Mutex};

@@ -913,7 +913,7 @@ fn rocket_tower_hits_at_long_range() {
             Heading(0.0),
         ))
         .id();
-    assert!(22.0 - 1.4 > 17.0, "Ziel muss außerhalb der Geschützturm-Reichweite liegen");
+    // Abstand 22 m minus Radius 1,4 m liegt außerhalb der Geschützturm-Reichweite (17 m)
     for _ in 0..80 {
         app.update();
     }

@@ -1,5 +1,9 @@
 # Ferrum Nova
 
+[![Ferrum Nova im Browser: eigene Basis mit HQ, Panzern und Sammler zwischen Ferrit-Kristallen und einer Plasma-Quelle](docs/screenshot.jpg)](https://danielenki420.github.io/ferrum-nova/)
+
+**[Jetzt im Browser spielen](https://danielenki420.github.io/ferrum-nova/)** · Version 0.1 · [MIT-Lizenz](LICENSE)
+
 Ein eigenes Echtzeitstrategie-Spiel in **Rust + Bevy 0.20**. Es läuft als WebAssembly im Browser und ist in eine **Astro**-Website eingebettet. Aus demselben Code lässt sich auch eine Desktop-Version bauen.
 
 **Eine Hommage an Thandor.** Ferrum Nova ist eine Verbeugung vor *Thandor – Die Invasion*, dem Echtzeitstrategie-Spiel des Hannoveraner Studios Innonics aus dem Jahr 2000 (Vertrieb: JoWooD). Von dort stammt die Lust auf schwere Fahrzeuge, Basisbau und Gefechte auf einer fremden Welt. Ferrum Nova ist aber kein Nachbau: Welt, Geschichte, Einheiten, Grafik und Klänge sind eigenständig entstanden. Name und Inhalte von Thandor gehören ihren Rechteinhabern.
