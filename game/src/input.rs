@@ -374,7 +374,7 @@ pub fn mouse_commands(
     nodes: Query<(Entity, &GlobalTransform), With<ResourceNode>>,
     (ids, mut outbox): (Query<&NetId>, ResMut<crate::net::cmd::Outbox>),
     (mut sel_box, panel): (Query<(&mut Node, &mut Visibility), With<SelectionBox>>, Query<&RelativeCursorPosition, With<SelCard>>),
-    ui_scale: Res<UiScale>,
+    (ui_scale, walls): (Res<UiScale>, Query<(Entity, &Transform, &Team, &Structure), (Without<Unit>, Without<Construction>)>),
     mut placing: ResMut<crate::construction::Placing>,
     mut last_click: Local<(f64, Option<Entity>)>,
     mode: Res<ClickMode>,
@@ -526,9 +526,38 @@ pub fn mouse_commands(
                         commands.entity(e).insert(Selected);
                     }
                 } else if let Some(b) = building_hit() {
-                    *last_click = (now, None);
-                    deselect_all(&mut commands);
+                    let double = left_presses >= 2 || (last_click.1 == Some(b) && now - last_click.0 < DOUBLE_CLICK);
+                    *last_click = (now, Some(b));
+                    // Shift+Klick nimmt weitere Gebäude dazu (Einheiten fallen aus der Auswahl)
+                    if shift && !buildings.get(b).is_ok_and(|r| r.4) {
+                        for (e, _, _, _, sel, _, _) in &units {
+                            if sel {
+                                commands.entity(e).remove::<Selected>();
+                            }
+                        }
+                        for (e, _, _, _, hq, sel) in &buildings {
+                            if sel && hq {
+                                commands.entity(e).remove::<Selected>();
+                            }
+                        }
+                    } else {
+                        deselect_all(&mut commands);
+                    }
                     commands.entity(b).insert(Selected);
+                    // Doppelklick auf ein Mauerstück: die ganze verbundene Mauer
+                    if double && walls.get(b).is_ok_and(|w| w.3 .0 == BuildingKind::Mauer) {
+                        let list: Vec<(Entity, Vec3, Quat)> = walls
+                            .iter()
+                            .filter(|w| *w.2 == me && w.3 .0 == BuildingKind::Mauer)
+                            .map(|w| (w.0, w.1.translation, w.1.rotation))
+                            .collect();
+                        if let Some(start) = list.iter().position(|w| w.0 == b) {
+                            let pieces: Vec<(Vec3, Quat)> = list.iter().map(|w| (w.1, w.2)).collect();
+                            for i in crate::construction::connected_walls(start, &pieces) {
+                                commands.entity(list[i].0).insert(Selected);
+                            }
+                        }
+                    }
                 } else if left_mode && has_selection {
                     *last_click = (now, None);
                     command_at = ground_point(camera, cam_t, c).map(|gp| (c, gp));

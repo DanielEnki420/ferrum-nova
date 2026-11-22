@@ -228,6 +228,29 @@ pub fn wall_ends(center: Vec3, rot: Quat) -> [Vec3; 2] {
     [center + d, center - d]
 }
 
+/// Mauerstücke, die über ihre Enden mit dem Stück `start` verbunden sind (einschließlich `start`).
+/// `pieces`: Mitte und Ausrichtung je Stück.
+pub fn connected_walls(start: usize, pieces: &[(Vec3, Quat)]) -> Vec<usize> {
+    const TOUCH: f32 = 0.6;
+    let ends: Vec<[Vec3; 2]> = pieces.iter().map(|(c, r)| wall_ends(*c, *r)).collect();
+    let touch = |a: usize, b: usize| ends[a].iter().any(|p| ends[b].iter().any(|q| flat(*p).distance(flat(*q)) < TOUCH));
+    let mut found = vec![start];
+    let mut seen = vec![false; pieces.len()];
+    seen[start] = true;
+    let mut i = 0;
+    while i < found.len() {
+        let a = found[i];
+        for (b, seen_b) in seen.iter_mut().enumerate() {
+            if !*seen_b && touch(a, b) {
+                *seen_b = true;
+                found.push(b);
+            }
+        }
+        i += 1;
+    }
+    found
+}
+
 fn nearest_within(p: Vec3, pts: impl Iterator<Item = Vec3>, max: f32) -> Option<Vec3> {
     pts.map(|q| (flat(q).distance(flat(p)), q))
         .filter(|(d, _)| *d < max)
@@ -252,10 +275,17 @@ pub fn building_actions(
         return;
     }
     let me = crate::net::me();
-    let Some((e, id, _, s)) = selected.iter().find(|r| *r.2 == me) else { return };
+    let own: Vec<_> = selected.iter().filter(|r| *r.2 == me).collect();
     if keys.any_just_pressed([KeyCode::Delete, KeyCode::Backspace]) {
-        outbox.push(crate::net::cmd::Cmd::Demolish { building: *id });
-    } else if keys.just_pressed(KeyCode::KeyO) {
+        // alle ausgewählten auf einmal (z. B. eine ganze Mauerlinie per Doppelklick)
+        for (_, id, _, _) in &own {
+            outbox.push(crate::net::cmd::Cmd::Demolish { building: **id });
+        }
+        return;
+    }
+    // Versetzen nur für ein einzelnes Gebäude
+    let [(e, id, _, s)] = own[..] else { return };
+    if keys.just_pressed(KeyCode::KeyO) {
         placing.kind = Some(s.0);
         placing.moving = Some((e, *id));
         placing.line_start = None;

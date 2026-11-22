@@ -317,7 +317,7 @@ pub fn update_hud(
             counts[u.kind.idx()] += 1;
         }
     }
-    let own_building = selected_building.iter().find(|(t, _)| **t == crate::net::me()).map(|(_, s)| s.0);
+    let own_buildings: Vec<BuildingKind> = selected_building.iter().filter(|(t, _)| **t == crate::net::me()).map(|(_, s)| s.0).collect();
     let sel_text = if let (Some(k), Some(_)) = (placing.kind, placing.moving) {
         format!("{} versetzen: Linksklick an der neuen Stelle (baut sich in halber Zeit neu auf) | Rechtsklick/Esc: abbrechen", k.name())
     } else if placing.kind == Some(BuildingKind::Mauer) {
@@ -333,9 +333,15 @@ pub fn update_hud(
         "Hauptquartier: Klick ins Gelaende setzt den Sammelpunkt | Rechtsklick: Auswahl aufheben".to_string()
     } else if counts.iter().sum::<i32>() == 0 && selected_hq.iter().any(|t| *t == crate::net::me()) {
         "Hauptquartier: Rechtsklick setzt den Sammelpunkt (auf einem Feld: Sammler bauen dort ab)".to_string()
-    } else if let (Some(k), 0) = (own_building, counts.iter().sum::<i32>()) {
-        let back = crate::construction::refund(k);
-        format!("{}: Entf abreissen (+{} F / {} P zurueck) | O versetzen", k.name(), back[0], back[1])
+    } else if !own_buildings.is_empty() && counts.iter().sum::<i32>() == 0 {
+        let back = own_buildings.iter().map(|k| crate::construction::refund(*k)).fold([0, 0], |a, b| [a[0] + b[0], a[1] + b[1]]);
+        match own_buildings[..] {
+            [k] => {
+                let wall = if k == BuildingKind::Mauer { " | Doppelklick: ganze Mauer" } else { "" };
+                format!("{}: Entf abreissen (+{} F / {} P zurueck) | O versetzen | Shift+Klick: weitere dazu{wall}", k.name(), back[0], back[1])
+            }
+            _ => format!("{} Gebaeude: Entf alle abreissen (+{} F / {} P zurueck) | Shift+Klick: weitere dazu", own_buildings.len(), back[0], back[1]),
+        }
     } else if counts.iter().sum::<i32>() == 0 {
         let mode_hint = if mode.left_commands { "L: Zweitasten-Steuerung" } else { "L: Einknopf-Steuerung" };
         format!("Links: auswaehlen | Doppelklick: gleicher Typ | F: alle Kampfeinheiten | 1-9: Gruppe abrufen | {mode_hint}")

@@ -479,3 +479,22 @@ fn wall_ends_lie_on_the_line() {
     let first = crate::construction::wall_ends(segs[0], rot);
     assert!(first.iter().any(|p| p.distance(a) < 1e-4));
 }
+
+/// Doppelklick auf ein Mauerstück wählt die verbundene Mauer: zwei Linien mit gemeinsamer Ecke
+/// gehören zusammen, ein abseits stehendes Stück nicht
+#[test]
+fn connected_walls_follow_the_line_around_corners() {
+    use crate::construction::{along, connected_walls, wall_segments};
+    let mut pieces = Vec::new();
+    let (a, b, c) = (Vec3::ZERO, Vec3::new(8.0, 0.0, 0.0), Vec3::new(8.0, 0.0, 6.0));
+    for (from, to) in [(a, b), (b, c)] {
+        let (segs, _) = wall_segments(from, to);
+        pieces.extend(segs.into_iter().map(|s| (s, along(to - from))));
+    }
+    let line = pieces.len();
+    pieces.push((Vec3::new(-10.0, 0.0, 5.0), Quat::IDENTITY));
+    let mut found = connected_walls(0, &pieces);
+    found.sort();
+    assert_eq!(found, (0..line).collect::<Vec<_>>());
+    assert_eq!(connected_walls(line, &pieces), vec![line]);
+}
