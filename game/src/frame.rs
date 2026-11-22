@@ -326,6 +326,8 @@ pub enum FrameButton {
     CopyLink,
     /// Aufgeben (Duell)
     Surrender,
+    /// Neuigkeiten-Fenster schließen
+    CloseNews,
 }
 
 /// Nur im Einzelspieler sichtbar
@@ -370,6 +372,22 @@ pub struct PausePanel;
 pub struct EndPanel;
 #[derive(Component)]
 pub struct HelpPanel;
+/// Fenster „Neu in dieser Version“ (einmal nach jedem Update)
+#[derive(Component)]
+pub struct NewsPanel;
+
+/// Speicherschlüssel: zuletzt gezeigte Version der Neuigkeiten
+const NEWS_KEY: &str = "ferrum-nova-news";
+/// Neuigkeiten der aktuellen Version (bei jedem Release anpassen)
+const NEWS: &[&str] = &[
+    "Gebäude abreißen: anklicken und Entf drücken, die halben Kosten kommen zurück.",
+    "Gebäude versetzen: anklicken, O drücken, neuen Platz klicken.",
+    "Doppelklick auf ein Mauerstück wählt die ganze Mauer, Entf reißt sie ab.",
+    "Rundere Mauern, die an vorhandenen Enden einrasten.",
+    "Echte Umlaute in allen Texten.",
+    "Safari: Speichersparmodus, das Spiel lädt nicht mehr neu.",
+    "Behoben: Absturz beim Bau großer Mauern.",
+];
 #[derive(Component)]
 pub struct DiffHint;
 #[derive(Component)]
@@ -483,6 +501,29 @@ Leertaste: zum letzten Angriff   |   Pos1: zur Basis   |   P / Esc: Pause   |   
 Einheiten: X C V B N M (am HQ)   |   Gebaeude: G H J U K I";
 
 pub fn setup_frame(mut commands: Commands, cfg: Res<MatchConfig>) {
+    // Neuigkeiten einmal je Version zeigen, nur im Hauptmenü (nicht beim direkten Start oder im Duell)
+    let version = env!("CARGO_PKG_VERSION");
+    if !cfg.autostart && cfg.duell.is_none() && crate::audio::storage_get(NEWS_KEY).as_deref() != Some(version) {
+        let short = version.trim_end_matches(".0");
+        commands
+            .spawn(overlay(NewsPanel, 70))
+            .insert(Visibility::Inherited)
+            .with_children(|o| {
+                o.spawn(card()).with_children(|c| {
+                    c.spawn(text(format!("Neu in Version {short}"), 30.0, ACCENT));
+                    c.spawn((
+                        Node { flex_direction: FlexDirection::Column, margin: UiRect::vertical(px(16)), row_gap: px(6), ..default() },
+                    ))
+                    .with_children(|l| {
+                        for line in NEWS {
+                            l.spawn(text(format!("• {line}"), 15.0, TEXT));
+                        }
+                    });
+                    c.spawn(button(FrameButton::CloseNews, "Los geht's", 220.0));
+                });
+            });
+    }
+
     // Hauptmenü
     commands.spawn((overlay(MenuPanel, 50), children![(
         card(),
@@ -674,7 +715,10 @@ pub fn frame_buttons(
     mut campaign: ResMut<CampaignShown>,
     mut era: ResMut<crate::era::Era>,
     (mut vaar, mut outbox): (ResMut<crate::vaar::VaarMemory>, ResMut<crate::net::cmd::Outbox>),
+    (mut commands, news): (Commands, Query<Entity, With<NewsPanel>>),
 ) {
+    // Solange die Neuigkeiten offen sind, gilt nur deren Knopf (die Menüknöpfe liegen darunter)
+    let news_open = !news.is_empty();
     for (c, mut t) in &mut captions {
         let (name, on) = match c.0 {
             FrameButton::Sound => ("Ton", prefs.sfx),
@@ -693,7 +737,7 @@ pub fn frame_buttons(
     let pressed = clicks.read().any(|c| c.button == MouseButton::Left && c.state == ButtonState::Pressed);
     let mut action = None;
     for (b, rel, vis, mut bg, locked) in &mut q {
-        if !vis.get() {
+        if !vis.get() || (news_open && *b != FrameButton::CloseNews) {
             continue;
         }
         if locked {
@@ -725,6 +769,12 @@ pub fn frame_buttons(
             }
         }
         FrameButton::Help => help.0 = !help.0,
+        FrameButton::CloseNews => {
+            crate::audio::storage_set(NEWS_KEY, env!("CARGO_PKG_VERSION"));
+            for e in &news {
+                commands.entity(e).despawn();
+            }
+        }
         FrameButton::Resume => {
             help.0 = false;
             *phase = Phase::Playing;
